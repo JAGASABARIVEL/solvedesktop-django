@@ -429,11 +429,13 @@ class CampaignScheduleMonitor:
                                 SET status={self.param} 
                                 WHERE id={self.param}
                             """, ('warning',schedule_id,))
-            # TODO: Increase this to ~1 minute in production
-            # time.sleep(8)
         finally:
             self.logger.info("Stopping campaign schedule task...")
 
 
 if __name__ == "__main__":
-    CampaignScheduleMonitor().process_campaign_schedule_message()
+    campaign_instance = CampaignScheduleMonitor()
+    while True:
+        campaign_instance.process_campaign_schedule_message()
+        # TODO: Increase this to ~1 minute in production
+        time.sleep(58)

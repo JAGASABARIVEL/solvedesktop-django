@@ -6,6 +6,7 @@ from collections import defaultdict
 import mimetypes
 
 from django.db.models import Count, Case, When, F, Avg, Q
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 from django.utils.timezone import now, make_aware
@@ -114,6 +115,11 @@ def send_message(platform_id, recipient_id, message_body, template=None, message
                 token=token,
             )
             response = text_message.send_message(recipient_phone_number, message_body)
+            conversation = kwargs.get('conversation')
+            print("conversation ", conversation)
+            with transaction.atomic():
+                # Right now we dont have anyother way to confirm the delivery since its through websocket and not webhook to confirm the delivery
+                incoming_messages = IncomingMessage.objects.filter(conversation=conversation).update(status='responded')
             return response
         else:
             raise ValueError(f"Unsupported platform {platform_name}")
@@ -434,7 +440,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
                     recipient_id=conversation.contact_id,
                     message_body=message_body,
                     template=template,
-                    message_type=message_type
+                    message_type=message_type,
+                    conversation=conversation
                 )
             message_id = response.json().get('messages', [{}])[0].get('id', 'unknown') if response else None
             status_value = 'sent_to_server'
@@ -849,3 +856,38 @@ class MessagingCostReportView(APIView):
             "breakdown": breakdown
         })
 
+
+class UnrespondedConversationNotificationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        # Filter conversations assigned to the current user with unresponded messages
+        conversations = Conversation.objects.filter(
+            assigned_user=request.user,
+            incoming_messages__status__in=['unread', 'read']
+        ).distinct()
+
+        notifications = []
+
+        for convo in conversations:
+            # Get last unresponded message in this conversation
+            last_msg = convo.incoming_messages.filter(
+                status__in=['unread', 'read']
+            ).order_by('-received_time').first()
+
+            if last_msg:
+                notifications.append({
+                    'conversation_id': convo.id,
+                    'contact_id': convo.contact_id,
+                    'contact_name': str(convo.contact),
+                    'last_message': {
+                        'message_body': last_msg.message_body,
+                        'received_time': last_msg.received_time,
+                        'status': last_msg.status
+                    }
+                })
+
+        return Response({
+            'conversation_count': len(notifications),
+            'notifications': notifications
+        })

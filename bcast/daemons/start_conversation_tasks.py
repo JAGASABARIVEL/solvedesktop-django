@@ -27,14 +27,14 @@ else:
     os.environ["KAFKA_CONFIG"] = os.path.join(os.environ["CONFIG_DIR"], 'kafka.config')
     os.environ["KAFKA_CONFIG_GRP_ID"] = "whatsapp-grp-dev"
 os.environ["PG_DB"] = "postgres"
-os.environ["PG_HOST"] = "aws-0-ap-south-1.pooler.supabase.com"
+os.environ["PG_HOST"] = ""
 os.environ["PG_PORT"] = "5432"
-os.environ["PG_USER"] = "postgres.xdaezclupyfydrwiyxgo"
-os.environ["PG_PASSWORD"] = "Bcast@1"
-os.environ["B2_ENDPOINT_URL"] = 'https://s3.us-east-005.backblazeb2.com'
-os.environ["B2_ACCESS_KEY_ID"] = '005ed47f9b439120000000002'
-os.environ["B2_SECRET_ACCESS_KEY"] = 'K0059gUKZebIsHM6e0GGl/NhfcH0Kf0'
-os.environ["B2_STORAGE_BUCKET_NAME"] = 'solvedesktop-storage'
+os.environ["PG_USER"] = ""
+os.environ["PG_PASSWORD"] = ""
+os.environ["B2_ENDPOINT_URL"] = ''
+os.environ["B2_ACCESS_KEY_ID"] = ''
+os.environ["B2_SECRET_ACCESS_KEY"] = ''
+os.environ["B2_STORAGE_BUCKET_NAME"] = ''
 os.environ["SOCKET_URL"] = "https://solvedesktop.onrender.com?token={access_token}"
 #os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
 
@@ -43,7 +43,7 @@ def generate_forever_token():
         "role": "backend",
         "service": "bcast_backend",
     }
-    secret_key = 'jackdesk-secure-q20k18z!f@dw54&ko=1o&co=c-p)8c8o75lp%m#bup1mj@2_@%'
+    secret_key = ''
     token = jwt.encode(payload, secret_key, algorithm="HS256")
     return token
 
@@ -389,17 +389,19 @@ class WhatsAppKafkaConsumer:
                     return
                 organization_id, org_owner_id = org_row
 
-                cursor.execute(f"SELECT id FROM manage_contact_contact WHERE phone={self.param} AND organization_id={self.param}", (recipient_id, organization_id))
+                contact_id, contact_name = None, None
+                cursor.execute(f"SELECT id, name FROM manage_contact_contact WHERE phone={self.param} AND organization_id={self.param}", (recipient_id, organization_id))
                 contact_row = cursor.fetchone()
                 if contact_row:
-                    contact_id = contact_row[0]
+                    contact_id, contact_name = contact_row
                 else:
                     cursor.execute(
-                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, '', {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id",
+                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, '', {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id, name",
                         (recipient_id, organization_id, org_owner_id, 'whatsapp', datetime.now(), datetime.now())
                     )
-                    contact_id = cursor.fetchone()[0]
+                    contact_id, contact_name = cursor.fetchone()
 
+                is_conversation_new = True
                 cursor.execute(f"""
                     SELECT id FROM manage_conversation_conversation
                     WHERE contact_id={self.param} AND platform_id={self.param} AND organization_id={self.param} AND status IN ('new', 'active')
@@ -408,6 +410,7 @@ class WhatsAppKafkaConsumer:
                 conv_row = cursor.fetchone()
                 if conv_row:
                     conversation_id = conv_row[0]
+                    is_conversation_new = False
                 else:
                     cursor.execute(f"""
                         INSERT INTO manage_conversation_conversation (contact_id, platform_id, organization_id, open_by, status, created_at, updated_at)
@@ -430,7 +433,10 @@ class WhatsAppKafkaConsumer:
                     'status': msg_row[2],
                     'status_details': msg_row[3],
                     'type': 'customer',
-                    'msg_from_type': 'CUSTOMER'
+                    'msg_from_type': 'CUSTOMER',
+                    'organization_id': organization_id,
+                    'customer_name': contact_name,
+                    'is_conversation_new': is_conversation_new
                 }
                 self.logger.info("New customer message saved for conversation_id: %s", conversation_id)
                 self.sio.emit("whatsapp_chat", payload)
@@ -444,10 +450,10 @@ class WhatsAppKafkaConsumer:
             error_details = msg_data.get("error_details", None)
             with self.get_conn() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f"SELECT id, conversation_id FROM manage_conversation_usermessage WHERE messageid={self.param}", (message_id,))
+                cursor.execute(f"SELECT id, conversation_id, organization_id FROM manage_conversation_usermessage WHERE messageid={self.param}", (message_id,))
                 row = cursor.fetchone()
                 if row:
-                    user_message_id, conversation_id = row
+                    user_message_id, conversation_id, organization_id = row
                     if error_details:
                         cursor.execute(f"""
                             UPDATE manage_conversation_usermessage SET status={self.param}, status_details={self.param} WHERE id={self.param}
@@ -465,7 +471,8 @@ class WhatsAppKafkaConsumer:
 
                     self.sio.emit("whatsapp_chat", {
                         "conversation_id": conversation_id,
-                        "msg_from_type": "ORG"
+                        "msg_from_type": "ORG",
+                        'organization_id': organization_id,
                     })
         except Exception as e:
             self.logger.error("Error in handle_org_message: %s", e, exc_info=True)
@@ -501,16 +508,17 @@ class WhatsAppKafkaConsumer:
                 org_owner_id = org_row[0]
 
                 # 2. Get contact details
-                cursor.execute(f"SELECT id FROM manage_contact_contact WHERE phone={self.param} AND organization_id={self.param} AND platform_name={self.param}", (user_uuid_for_session, organization_id, 'webchat'))
+                contact_id, contact_name = None, None
+                cursor.execute(f"SELECT id, name FROM manage_contact_contact WHERE phone={self.param} AND organization_id={self.param} AND platform_name={self.param}", (user_uuid_for_session, organization_id, 'webchat'))
                 contact_row = cursor.fetchone()
                 if contact_row:
-                    contact_id = contact_row[0]
+                    contact_id, contact_name = contact_row
                 else:
                     cursor.execute(
-                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id",
+                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id, name",
                         (user_uuid_for_session, user_uuid_for_session, organization_id, org_owner_id, 'webchat', datetime.now(), datetime.now())
                     )
-                    contact_id = cursor.fetchone()[0]
+                    contact_id, contact_name = cursor.fetchone()
                 
                 is_conversation_new = True
                 #3. Start new / get existing conversation
@@ -548,6 +556,9 @@ class WhatsAppKafkaConsumer:
                     'status_details': None,
                     'type': 'customer',
                     'msg_from_type': 'CUSTOMER',
+                    'customer_name': contact_name,
+                    'organization_id': organization_id,
+                    'is_conversation_new': is_conversation_new
                 }
 
                 payload_chat_widget_client = {
@@ -591,7 +602,18 @@ class WhatsAppKafkaConsumer:
         finally:
             self.logger.info("Stopping Kafka consumer...")
             consumer.close()
+    
+    def devlmode(self):
+        try:
+            while True:
+                time.sleep(60)
+        finally:
+            self.logger.info("Closing long running main thread")
+
 
 
 if __name__ == "__main__":
-    WhatsAppKafkaConsumer().consume()
+    if os.environ["PRODUCTION"] == '1':
+        WhatsAppKafkaConsumer().consume()
+    else:
+        WhatsAppKafkaConsumer().devlmode()

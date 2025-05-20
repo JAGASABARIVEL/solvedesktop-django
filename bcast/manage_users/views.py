@@ -113,6 +113,7 @@ class GoogleLoginView(APIView):
 
             if enterprise_profile:
                 organization = getattr(enterprise_profile, "organization", None)
+                refresh["user_type"] = "ENTERPRISE"
                 refresh["role"] = "frontend"
                 refresh["service"] = "ui_main_client"
                 refresh["guest"] = False
@@ -136,6 +137,11 @@ class GoogleLoginView(APIView):
                     },
                 }, status=status.HTTP_200_OK)
             else:
+                refresh["user_type"] = "INDIVIDUAL"
+                refresh["role"] = "frontend"
+                refresh["service"] = "ui_main_client"
+                refresh["guest"] = False
+                refresh["organization_id"] = -1
                 return Response({
                     "refresh": str(refresh),
                     "access": str(refresh.access_token),
@@ -536,6 +542,7 @@ class GuestJWTView(APIView):
     def post(self, request):
         organization_id = request.data.get("organization")
         payload = {
+            "user_type": "GUEST",
             "role": "frontend",
             "service": "ui_chat_widget_client",
             "guest": True,

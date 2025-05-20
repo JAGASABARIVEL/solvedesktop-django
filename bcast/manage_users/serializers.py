@@ -60,6 +60,7 @@ class EnterpriseOwnerRegistrationSerializer(serializers.Serializer):
     login_id = serializers.CharField(required=True)
     app_id = serializers.CharField(required=True)
     login_credentials = serializers.CharField(required=True)
+    secret_key = serializers.CharField(required=True)
 
     def validate(self, data):
         # Ensure user is authenticated

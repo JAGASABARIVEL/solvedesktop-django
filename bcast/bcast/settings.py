@@ -40,16 +40,16 @@ KAFKA_CONFIG = os.path.join(BASE_DIR, "config", "kafka.config")
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'jackdesk-secure-q20k18z!f@dw54&ko=1o&co=c-p)8c8o75lp%m#bup1mj@2_@%'
+SECRET_KEY = ''
 AUTH_USER_MODEL = 'manage_users.CustomUser'
 ORG_MODEL = 'manage_organization.Organization'
 PLATFORM_MODEL = 'manage_platform.Platform'
 CONTACT_MODEL = 'manage_contact.Contact'
 
 # Celery configuration
-UPSTASH_REDIS_HOST="light-tadpole-45412.upstash.io"
+UPSTASH_REDIS_HOST=""
 UPSTASH_REDIS_PORT=6379
-UPSTASH_REDIS_PASSWORD="AbFkAAIjcDFlYzk1OTAwMjVjMGE0ZGE1YTNhZWVhYjM5MzYwMzE3OHAxMA"
+UPSTASH_REDIS_PASSWORD=""
 CELERY_BROKER_URL = f"rediss://:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_HOST}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=required"
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -71,8 +71,8 @@ CELERY_BEAT_SCHEDULE = {
 
 
 # Google Secrets
-GOOGLE_CLIENT_ID = "556673880157-840ns0acfd66aq42kjjaphg9l6dbqe5h.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET = "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"
+GOOGLE_CLIENT_ID = ""
+GOOGLE_CLIENT_SECRET = ""
 
 # SMTP configuration
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -84,21 +84,23 @@ EMAIL_HOST_PASSWORD = ''
 DEFAULT_FROM_EMAIL = 'kjagasabarivel@gmail.com'
 
 # AWS s3 settings,
-AWS_ACCESS_KEY_ID = 'AKIAXB2X7OLBQOHY5FFH'
-AWS_SECRET_ACCESS_KEY = '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'
-AWS_STORAGE_BUCKET_NAME = 'solvedesktop-storage'
+AWS_ACCESS_KEY_ID = ''
+AWS_SECRET_ACCESS_KEY = ''
+AWS_STORAGE_BUCKET_NAME = ''
 
 # B2 s3 settings,
-B2_ENDPOINT_URL = 'https://s3.us-east-005.backblazeb2.com'
-B2_ACCESS_KEY_ID = '005ed47f9b439120000000002'
-B2_SECRET_ACCESS_KEY = 'K0059gUKZebIsHM6e0GGl/NhfcH0Kf0'
-B2_STORAGE_BUCKET_NAME = 'solvedesktop-storage'
+B2_ENDPOINT_URL = ''
+B2_ACCESS_KEY_ID = ''
+B2_SECRET_ACCESS_KEY = ''
+B2_STORAGE_BUCKET_NAME = ''
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = [
-    "ec2-65-0-105-225.ap-south-1.compute.amazonaws.com",
+    "localhost"
+    #"app.jackdesk.com"
+    #"ec2-65-0-105-225.ap-south-1.compute.amazonaws.com",
     #"jagasabarivel.pythonanywhere.com"
 ]
 
@@ -204,24 +206,24 @@ WSGI_APPLICATION = 'bcast.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-#DATABASES = {
-#    'default': {
-#        'ENGINE': 'django.db.backends.sqlite3',
-#        'NAME': BASE_DIR / 'db.sqlite3',
-#    }
-#}
-
-
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'postgres',
-        'USER': 'postgres.xdaezclupyfydrwiyxgo',
-        'PASSWORD': 'Bcast@1',
-        'HOST': 'aws-0-ap-south-1.pooler.supabase.com',
-        'PORT': '5432'
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+
+#DATABASES = {
+#    'default': {
+#        'ENGINE': 'django.db.backends.postgresql',
+#        'NAME': 'postgres',
+#        'USER': 'postgres.xdaezclupyfydrwiyxgo',
+#        'PASSWORD': 'Bcast@1',
+#        'HOST': 'aws-0-ap-south-1.pooler.supabase.com',
+#        'PORT': '5432'
+#    }
+#}
 
 #postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DB_NAME>
 
