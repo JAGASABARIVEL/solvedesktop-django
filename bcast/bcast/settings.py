@@ -40,7 +40,7 @@ KAFKA_CONFIG = os.path.join(BASE_DIR, "config", "kafka.config")
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-q20k5bz!f@dw59&ko=1o&co=c-p)8c6o75lp%m#bup1mj@2_@%'
+SECRET_KEY = 'jackdesk-secure-q20k18z!f@dw54&ko=1o&co=c-p)8c8o75lp%m#bup1mj@2_@%'
 AUTH_USER_MODEL = 'manage_users.CustomUser'
 ORG_MODEL = 'manage_organization.Organization'
 PLATFORM_MODEL = 'manage_platform.Platform'
@@ -69,6 +69,7 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 
+
 # Google Secrets
 GOOGLE_CLIENT_ID = "556673880157-840ns0acfd66aq42kjjaphg9l6dbqe5h.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET = "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"
@@ -94,9 +95,12 @@ B2_SECRET_ACCESS_KEY = 'K0059gUKZebIsHM6e0GGl/NhfcH0Kf0'
 B2_STORAGE_BUCKET_NAME = 'solvedesktop-storage'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "ec2-65-0-105-225.ap-south-1.compute.amazonaws.com",
+    #"jagasabarivel.pythonanywhere.com"
+]
 
 
 # Application definition
@@ -160,19 +164,20 @@ REST_FRAMEWORK = {
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(days=1),  # Default is 5 minutes, change as needed
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),  # Extend refresh token validity
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),  # Extend refresh token validity
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "SIGNING_KEY": SECRET_KEY,  # Use Django secret key
-    "AUTH_HEADER_TYPES": ("Bearer",)
+    "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:4200",  # Angular frontend
+    "https://jackdesk.com",
+    "http://localhost:4200"
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:4200",
+    "https://jackdesk.com",
 ]
 
 ROOT_URLCONF = 'bcast.urls'
@@ -199,37 +204,24 @@ WSGI_APPLICATION = 'bcast.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
+#DATABASES = {
+#    'default': {
+#        'ENGINE': 'django.db.backends.sqlite3',
+#        'NAME': BASE_DIR / 'db.sqlite3',
+#    }
+#}
+
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',
+        'USER': 'postgres.xdaezclupyfydrwiyxgo',
+        'PASSWORD': 'Bcast@1',
+        'HOST': 'aws-0-ap-south-1.pooler.supabase.com',
+        'PORT': '5432'
     }
 }
-
-#DATABASES = {
-#    'default': {
-#        'ENGINE': 'django.db.backends.postgresql',
-#        'NAME': 'postgres',
-#        'USER': 'postgres',
-#        'PASSWORD': 'Bcast@1',
-#        'HOST': 'db.xdaezclupyfydrwiyxgo.supabase.co',
-#        'PORT': '5432',
-#        'CONN_MAX_AGE': 900,
-#    }
-#}
-
-# Pooler connection for connection to be made from IPV4 systems(public cloud) since supabase has limitations
-#DATABASES = {
-#    'default': {
-#        'ENGINE': 'django.db.backends.postgresql',
-#        'NAME': 'postgres',
-#        'USER': 'postgres.xdaezclupyfydrwiyxgo',  # From the pooler connection
-#        'PASSWORD': 'Bcast@1',             # Replace with your actual password
-#        'HOST': 'aws-0-ap-south-1.pooler.supabase.com',
-#        'PORT': '5432',
-#    }
-#}
-
 
 #postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DB_NAME>
 

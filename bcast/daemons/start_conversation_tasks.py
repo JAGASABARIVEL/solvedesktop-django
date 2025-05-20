@@ -16,7 +16,7 @@ import socketio
 import requests
 from confluent_kafka import Consumer as ConfluentConsumer, KafkaError
 
-os.environ["PRODUCTION"] = '0'
+os.environ["PRODUCTION"] = '1'
 os.environ["SQLITE_DB"] = 'db.sqlite3'
 os.environ["HOME_DIR"] = '/home/jagasabarivel/bcast'
 os.environ["CONFIG_DIR"] = 'config'
@@ -35,15 +35,15 @@ os.environ["B2_ENDPOINT_URL"] = 'https://s3.us-east-005.backblazeb2.com'
 os.environ["B2_ACCESS_KEY_ID"] = '005ed47f9b439120000000002'
 os.environ["B2_SECRET_ACCESS_KEY"] = 'K0059gUKZebIsHM6e0GGl/NhfcH0Kf0'
 os.environ["B2_STORAGE_BUCKET_NAME"] = 'solvedesktop-storage'
-#os.environ["SOCKET_URL"] = "https://solvedesktop.onrender.com?token={access_token}"
-os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
+os.environ["SOCKET_URL"] = "https://solvedesktop.onrender.com?token={access_token}"
+#os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
 
 def generate_forever_token():
     payload = {
         "role": "backend",
         "service": "bcast_backend",
     }
-    secret_key = "django-insecure-q20k5bz!f@dw59&ko=1o&co=c-p)8c6o75lp%m#bup1mj@2_@%"
+    secret_key = 'jackdesk-secure-q20k18z!f@dw54&ko=1o&co=c-p)8c8o75lp%m#bup1mj@2_@%'
     token = jwt.encode(payload, secret_key, algorithm="HS256")
     return token
 
