@@ -32,8 +32,10 @@ os.environ["B2_ENDPOINT_URL"] = config("B2_ENDPOINT_URL")
 os.environ["B2_ACCESS_KEY_ID"] = config("B2_ACCESS_KEY_ID")
 os.environ["B2_SECRET_ACCESS_KEY"] = config("B2_SECRET_ACCESS_KEY")
 os.environ["B2_STORAGE_BUCKET_NAME"] = config("B2_STORAGE_BUCKET_NAME")
-os.environ["SOCKET_URL"] = "https://solvedesktop.onrender.com?token={access_token}"
-os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
+if os.getenv("PRODUCTION") == '1':
+    os.environ["SOCKET_URL"] = "https://solvedesktop.onrender.com?token={access_token}"
+else:
+    os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
 
 def generate_forever_token():
     payload = {
