@@ -78,7 +78,8 @@ requests==2.32.3
 requests-oauthlib==2.0.0
 rsa==4.9
 s3transfer==0.10.4
-setuptools==75.7.0
+#setuptools==75.7.0
+setuptools>=78.1.1
 simple-websocket==1.1.0
 six==1.17.0
 sqlparse==0.5.3
