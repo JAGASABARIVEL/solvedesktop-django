@@ -80,7 +80,7 @@ DEBUG = True
 
 ALLOWED_HOSTS = [
     "localhost"
-    #"app.jackdesk.com"
+    "api.jackdesk.com"
     #"ec2-65-0-105-225.ap-south-1.compute.amazonaws.com",
     #"jagasabarivel.pythonanywhere.com"
 ]
