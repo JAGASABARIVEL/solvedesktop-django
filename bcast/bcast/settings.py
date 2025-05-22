@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 import os
 from pathlib import Path
 from datetime import timedelta
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,48 +32,28 @@ CONVERSATION_FREE_TIER_LIMIT = 1000
 # Storage Payment Threshold
 FILE_STORAGE_DUE_THRESHOLD = 100 # ₹ 100
 
-# App Config
-LOCK_FILE = os.path.join(BASE_DIR, "config", "kafka_consumer.lock")
-LOCK_FILE_CAMPAIGN = os.path.join(BASE_DIR, "config", "campaign.lock")
-KAFKA_CONFIG = os.path.join(BASE_DIR, "config", "kafka.config")
-
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = ''
+SECRET_KEY = config("DRF_KEY")
 AUTH_USER_MODEL = 'manage_users.CustomUser'
 ORG_MODEL = 'manage_organization.Organization'
 PLATFORM_MODEL = 'manage_platform.Platform'
 CONTACT_MODEL = 'manage_contact.Contact'
 
 # Celery configuration
-UPSTASH_REDIS_HOST=""
+UPSTASH_REDIS_HOST=config("UPSTASH_REDIS_HOST")
 UPSTASH_REDIS_PORT=6379
-UPSTASH_REDIS_PASSWORD=""
+UPSTASH_REDIS_PASSWORD=config("UPSTASH_REDIS_PASSWORD")
 CELERY_BROKER_URL = f"rediss://:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_HOST}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=required"
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 
-from celery.schedules import crontab
-from celery.schedules import crontab
-
-CELERY_BEAT_SCHEDULE = {
-    'process-scheduled-messages': {
-        'task': 'manage_campaign.tasks.process_scheduled_messages',
-        'schedule': crontab(minute='*'),  # Runs every minute
-    },
-    'recover-stuck-messages-every-5-minutes': {
-        'task': 'manage_campaign.tasks.recover_stuck_scheduled_messages',
-        'schedule': crontab(minute='*/5'),  # every 5 mins
-    },
-}
-
-
 
 # Google Secrets
-GOOGLE_CLIENT_ID = ""
-GOOGLE_CLIENT_SECRET = ""
+GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = config("GOOGLE_CLIENT_SECRET")
 
 # SMTP configuration
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -84,15 +65,15 @@ EMAIL_HOST_PASSWORD = ''
 DEFAULT_FROM_EMAIL = 'kjagasabarivel@gmail.com'
 
 # AWS s3 settings,
-AWS_ACCESS_KEY_ID = ''
-AWS_SECRET_ACCESS_KEY = ''
-AWS_STORAGE_BUCKET_NAME = ''
+AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY")
+AWS_STORAGE_BUCKET_NAME = config("AWS_STORAGE_BUCKET_NAME")
 
 # B2 s3 settings,
-B2_ENDPOINT_URL = ''
-B2_ACCESS_KEY_ID = ''
-B2_SECRET_ACCESS_KEY = ''
-B2_STORAGE_BUCKET_NAME = ''
+B2_ENDPOINT_URL = config("B2_ENDPOINT_URL")
+B2_ACCESS_KEY_ID = config("B2_ACCESS_KEY_ID")
+B2_SECRET_ACCESS_KEY = config("B2_SECRET_ACCESS_KEY")
+B2_STORAGE_BUCKET_NAME = config("B2_STORAGE_BUCKET_NAME")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -165,8 +146,8 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),  # Default is 5 minutes, change as needed
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),  # Extend refresh token validity
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),  # Default is 5
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),  # Extend refresh
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "SIGNING_KEY": SECRET_KEY,  # Use Django secret key
@@ -179,7 +160,6 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://jackdesk.com",
 ]
 
 ROOT_URLCONF = 'bcast.urls'
@@ -206,44 +186,44 @@ WSGI_APPLICATION = 'bcast.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
-
-
 #DATABASES = {
 #    'default': {
-#        'ENGINE': 'django.db.backends.postgresql',
-#        'NAME': 'postgres',
-#        'USER': 'postgres.xdaezclupyfydrwiyxgo',
-#        'PASSWORD': 'Bcast@1',
-#        'HOST': 'aws-0-ap-south-1.pooler.supabase.com',
-#        'PORT': '5432'
+#        'ENGINE': 'django.db.backends.sqlite3',
+#        'NAME': BASE_DIR / 'db.sqlite3',
 #    }
 #}
 
-#postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DB_NAME>
 
-#postgresql://postgres:[YOUR-PASSWORD]@db.xdaezclupyfydrwiyxgo.supabase.co:5432/postgres
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': config("PG_DB"),
+        'USER': config("PG_USER"),
+        'PASSWORD': config("PG_PASSWORD"),
+        'HOST': config("PG_HOST"),
+        'PORT': config("PG_PORT")
+    }
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        'NAME':
+'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'NAME':
+'django.contrib.auth.password_validation.MinimumLengthValidator',
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+        'NAME':
+'django.contrib.auth.password_validation.CommonPasswordValidator',
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        'NAME':
+'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
 

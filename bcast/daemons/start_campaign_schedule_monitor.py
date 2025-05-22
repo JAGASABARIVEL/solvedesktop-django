@@ -8,17 +8,18 @@ import psycopg2
 from contextlib import contextmanager
 import datetime
 from dateutil.relativedelta import relativedelta
+from decouple import config
 
 from VendorApi.Whatsapp.message import TextMessage, TemplateMessage
 
 
-os.environ["PRODUCTION"] = '1'
+os.environ["PRODUCTION"] = config("PRODUCTION")
 os.environ["SQLITE_DB"] = 'db.sqlite3'
-os.environ["PG_DB"] = "postgres"
-os.environ["PG_USER"] = "postgres.xdaezclupyfydrwiyxgo"
-os.environ["PG_PASSWORD"] = "Bcast@1"
-os.environ["PG_HOST"] = "aws-0-ap-south-1.pooler.supabase.com"
-os.environ["PG_PORT"] = "5432"
+os.environ["PG_DB"] = config("PG_DB")
+os.environ["PG_HOST"] = config("PG_HOST")
+os.environ["PG_PORT"] = config("PG_PORT")
+os.environ["PG_USER"] = config("PG_USER")
+os.environ["PG_PASSWORD"] = config("PG_PASSWORD")
 
 CAMPAIGN_CLOSED_REASON = "Campaign"
 

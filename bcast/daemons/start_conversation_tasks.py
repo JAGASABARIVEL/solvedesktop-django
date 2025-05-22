@@ -15,26 +15,23 @@ from botocore.client import Config
 import socketio
 import requests
 from confluent_kafka import Consumer as ConfluentConsumer, KafkaError
+from decouple import config
 
-os.environ["PRODUCTION"] = '1'
+os.environ["PRODUCTION"] = config("PRODUCTION")
 os.environ["SQLITE_DB"] = 'db.sqlite3'
-os.environ["HOME_DIR"] = '/home/jagasabarivel/bcast'
-os.environ["CONFIG_DIR"] = 'config'
 if os.getenv("PRODUCTION") == '1':
-    os.environ["KAFKA_CONFIG"] = os.path.join(os.environ["HOME_DIR"], os.environ["CONFIG_DIR"], 'kafka.config')
     os.environ["KAFKA_CONFIG_GRP_ID"] = "whatsapp-grp-cloud"
 else:
-    os.environ["KAFKA_CONFIG"] = os.path.join(os.environ["CONFIG_DIR"], 'kafka.config')
     os.environ["KAFKA_CONFIG_GRP_ID"] = "whatsapp-grp-dev"
-os.environ["PG_DB"] = "postgres"
-os.environ["PG_HOST"] = ""
-os.environ["PG_PORT"] = "5432"
-os.environ["PG_USER"] = ""
-os.environ["PG_PASSWORD"] = ""
-os.environ["B2_ENDPOINT_URL"] = ''
-os.environ["B2_ACCESS_KEY_ID"] = ''
-os.environ["B2_SECRET_ACCESS_KEY"] = ''
-os.environ["B2_STORAGE_BUCKET_NAME"] = ''
+os.environ["PG_DB"] = config("PG_DB")
+os.environ["PG_HOST"] = config("PG_HOST")
+os.environ["PG_PORT"] = config("PG_PORT")
+os.environ["PG_USER"] = config("PG_USER")
+os.environ["PG_PASSWORD"] = config("PG_PASSWORD")
+os.environ["B2_ENDPOINT_URL"] = config("B2_ENDPOINT_URL")
+os.environ["B2_ACCESS_KEY_ID"] = config("B2_ACCESS_KEY_ID")
+os.environ["B2_SECRET_ACCESS_KEY"] = config("B2_SECRET_ACCESS_KEY")
+os.environ["B2_STORAGE_BUCKET_NAME"] = config("B2_STORAGE_BUCKET_NAME")
 os.environ["SOCKET_URL"] = "https://solvedesktop.onrender.com?token={access_token}"
 #os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
 
@@ -43,7 +40,7 @@ def generate_forever_token():
         "role": "backend",
         "service": "bcast_backend",
     }
-    secret_key = ''
+    secret_key = config("DRF_KEY")
     token = jwt.encode(payload, secret_key, algorithm="HS256")
     return token
 
@@ -53,7 +50,6 @@ class WhatsAppKafkaConsumer:
         self.use_sqlite = os.getenv("PRODUCTION") == '0'
         self.db_driver = sqlite3 if self.use_sqlite else psycopg2
         self.db_file = os.getenv("SQLITE_DB", "dev.sqlite3")
-        self.kafka_config_path = os.getenv("KAFKA_CONFIG", "client.properties")
         self.topic = "whatsapp"
         self.group_id = os.getenv("KAFKA_CONFIG_GRP_ID")
         self.sio = socketio.Client()
@@ -101,14 +97,15 @@ class WhatsAppKafkaConsumer:
         return '?' if self.use_sqlite else '%s'
 
     def read_config(self):
-        config = {}
-        with open(self.kafka_config_path) as fh:
-            for line in fh:
-                line = line.strip()
-                if len(line) != 0 and line[0] != "#":
-                    parameter, value = line.strip().split('=', 1)
-                    config[parameter] = value.strip()
-        return config
+        config = {
+            "bootstrap.servers": config("SERVER"),
+            "security.protocol": config("PROTOCOL"),
+            "sasl.mechanisms": config("MECHANISM"),
+            "sasl.username": config("UNAME"),
+            "sasl.password": config("PASSWORD"),
+            "session.timeout.ms": config("TIMEOUT_MS"),
+            "client.id": config("CLIENTID"),
+        }
 
     def process_message(self, message):
         if message["msg_from_type"] == "CUSTOMER":
