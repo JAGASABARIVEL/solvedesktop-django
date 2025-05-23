@@ -220,11 +220,15 @@ class ConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def close_conversation(self, request, pk=None):
         conversation = get_object_or_404(Conversation, pk=pk)
-        conversation.status = 'closed'
-        conversation.assigned_user = request.user
-        conversation.closed_by = request.user
-        conversation.closed_reason = request.data.get('reason', '')
-        conversation.save()
+        with transaction.atomic():
+                # Right now we dont have anyother way to confirm the delivery since its through websocket and not webhook to confirm the delivery
+                IncomingMessage.objects.filter(conversation=conversation).update(status='responded')
+                Conversation.objects.filter(id=conversation.id).update(
+                    status='closed',
+                    assigned_user=request.user,
+                    closed_by=request.user,
+                    closed_reason=request.data.get('reason', '')
+                )
         return Response({'status': 'conversation closed'})
     
     @action(detail=True, methods=['post'])

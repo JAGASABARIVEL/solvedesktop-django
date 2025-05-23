@@ -79,7 +79,7 @@ B2_STORAGE_BUCKET_NAME = config("B2_STORAGE_BUCKET_NAME")
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "localhost"
+    "localhost",
     "api.jackdesk.com"
     #"ec2-65-0-105-225.ap-south-1.compute.amazonaws.com",
     #"jagasabarivel.pythonanywhere.com"

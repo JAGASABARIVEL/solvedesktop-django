@@ -154,7 +154,7 @@ class CampaignScheduleMonitor:
                 if config['type'] == 'excel':
                     excel_data = config.get('data', [])
                     for row in excel_data:
-                        excel_phone_number = str(row.get('Phone'))
+                        excel_phone_number = str(row.get('phone'))
                         if excel_phone_number == phone_number:
                             # Get contact name using raw SQL
                             cursor.execute(
@@ -163,9 +163,9 @@ class CampaignScheduleMonitor:
                             )
                             result = cursor.fetchone()
                             contact_name = result[0] if result else excel_phone_number
-                            row['Phone'] = contact_name
+                            row['phone'] = contact_name
                             if template:
-                                headers = [header for header in row.keys() if header != 'Phone']
+                                headers = [header for header in row.keys() if header != 'phone']
                                 substitutions[excel_phone_number] = [
                                     {
                                         "type": "text",
