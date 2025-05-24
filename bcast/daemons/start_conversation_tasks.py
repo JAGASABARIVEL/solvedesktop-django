@@ -397,7 +397,7 @@ class WhatsAppKafkaConsumer:
                     contact_id, contact_name = contact_row
                 else:
                     cursor.execute(
-                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, '', {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id, name",
+                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, '', {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id, name",
                         (recipient_id, organization_id, org_owner_id, 'whatsapp', datetime.now(), datetime.now())
                     )
                     contact_id, contact_name = cursor.fetchone()
