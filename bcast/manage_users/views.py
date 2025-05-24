@@ -53,8 +53,61 @@ class AgentQuerysetMixin:
 
 
 from manage_subscriptions.models import Subscription, UserSubscription
+    
 
-        
+#import requests
+#from django.utils import timezone
+#from manage_email.models import GmailAccount
+#from manage_email.gmail_utils import watch_gmail
+#
+#class GmailOAuthCallback(APIView):
+#    permission_classes = []  # Ensure user is logged in via Google
+#    authentication_classes = []
+#    def get(self, request):
+#        code = request.GET.get("code")
+#        if not code:
+#            return Response({"error": "No code in request"}, status=400)
+#
+#        # Exchange code for tokens
+#        token_url = "https://oauth2.googleapis.com/token"
+#        data = {
+#            "code": code,
+#            "client_id": settings.GOOGLE_CLIENT_ID,
+#            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+#            "redirect_uri": "http://127.0.0.1:8000/users/api/gmail/oauth/callback",
+#            "grant_type": "authorization_code"
+#        }
+#        response = requests.post(token_url, data=data)
+#        token_data = response.json()
+#        print("token_data ", token_data)
+#
+#        # Extract info
+#        access_token = token_data.get("access_token")
+#        refresh_token = token_data.get("refresh_token")
+#        expires_in = token_data.get("expires_in")
+#
+#        # Get email
+#        user_info = requests.get(
+#            "https://www.googleapis.com/oauth2/v2/userinfo",
+#            headers={"Authorization": f"Bearer {access_token}"}
+#        ).json()
+#        email = user_info.get("email")
+#
+#        # Save to GmailAccount table
+#        account, created = GmailAccount.objects.update_or_create(
+#            email_address=email,
+#            defaults={
+#                # Hard coding for now but this would be two step process 1. Add emails which would insert organization of the user 2. Access which is this API and then we can update instead of inserting a new record.
+#                "organization_id": 1,
+#                "access_token": access_token,
+#                "refresh_token": refresh_token,
+#                "token_expiry": timezone.now() + timedelta(seconds=expires_in)
+#            }
+#        )
+#        watch_gmail(account)
+#
+#        return Response({"message": "Gmail connected successfully", "email": email})
+
 
 class GoogleLoginView(APIView):
     permission_classes = (NotLoggedIn,)

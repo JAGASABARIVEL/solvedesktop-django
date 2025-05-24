@@ -5,6 +5,7 @@ urlpatterns = [
     #path('register', views.UserRegistration.as_view()),
     #path('login', views.LoginView.as_view()),
     path('guest', views.GuestJWTView.as_view(), name='guest-jwt'),
+    #path('api/gmail/oauth/callback', views.GmailOAuthCallback.as_view()),
     path('login/google', views.GoogleLoginView.as_view()),
     path('ping', views.LoginPing.as_view()),
     path('list', views.UserListEnterpriseView.as_view()),
