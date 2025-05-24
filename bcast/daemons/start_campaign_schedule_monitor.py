@@ -430,6 +430,9 @@ class CampaignScheduleMonitor:
                                 SET status={self.param} 
                                 WHERE id={self.param}
                             """, ('warning',schedule_id,))
+        except Exception as e:
+            self.logger.error(e)
+            traceback.print_exc()
         finally:
             self.logger.info("Stopping campaign schedule task...")
 
@@ -439,4 +442,4 @@ if __name__ == "__main__":
     while True:
         campaign_instance.process_campaign_schedule_message()
         # TODO: Increase this to ~1 minute in production
-        time.sleep(58)
+        time.sleep(600)

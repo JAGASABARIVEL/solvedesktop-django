@@ -101,12 +101,14 @@ class WhatsAppKafkaConsumer:
     def read_config(self):
         return {
             "bootstrap.servers": config("SERVER"),
-            "security.protocol": config("PROTOCOL"),
-            "sasl.mechanisms": config("MECHANISM"),
-            "sasl.username": config("UNAME"),
-            "sasl.password": config("PASSWORD"),
+            #"security.protocol": config("PROTOCOL"),
+            #"sasl.mechanisms": config("MECHANISM"),
+            #"sasl.username": config("UNAME"),
+            #"sasl.password": config("PASSWORD"),
             "session.timeout.ms": config("TIMEOUT_MS"),
             "client.id": config("CLIENTID"),
+            "auto.offset.reset": "earliest",
+            "enable.auto.commit": True
         }
 
     def process_message(self, message):

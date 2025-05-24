@@ -76,7 +76,7 @@ B2_SECRET_ACCESS_KEY = config("B2_SECRET_ACCESS_KEY")
 B2_STORAGE_BUCKET_NAME = config("B2_STORAGE_BUCKET_NAME")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = [
     "localhost",
