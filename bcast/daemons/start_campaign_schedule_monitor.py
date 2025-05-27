@@ -234,7 +234,31 @@ class CampaignScheduleMonitor:
         except Exception as e:
             self.logger.error(f"Failed to send message", exc_info=True)
             raise RuntimeError(f"Failed to send message: {str(e)}")
-    
+
+    def update_user_message_model(self, cursor, response=None, **kwargs):
+        cursor.execute(
+            f"""
+            INSERT INTO manage_conversation_usermessage
+            (conversation_id, organization_id, platform_id, user_id, message_body, status, sent_time, messageid, template, message_type)
+            VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param}, {self.param})
+            """,
+            (
+                kwargs.get("conversation_id"),
+                kwargs.get("organization").id,
+                kwargs.get("platform").id,
+                kwargs.get("robo_user"),
+                "TEMPLATE" if kwargs.get("scheduled_message").template else str(kwargs.get("formatted_message")),
+                'sent' if response and next(iter(response.get('messages')), {}).get('message_status') in self.MSG_SENT else 'failed',
+                next(iter(response.get('messages')), {}).get('id') if response else None,
+                str(self.format_template_messages(
+                    kwargs.get("scheduled_message").template,
+                    {param['parameter_name']: param['text'] for param in kwargs.get("formatted_message")[kwargs.get("recipient").phone]}
+                    if kwargs.get("formatted_message").get(kwargs.get("recipient").phone) else None
+                )) if kwargs.get("scheduled_message").template else str(kwargs.get("formatted_message")),
+                "template"
+            )
+        )
+
     def process_recipient(self, conn, recipient, message_content, scheduled_message):
         try:
             formatted_message = self.substitute_placeholders(
@@ -263,20 +287,6 @@ class CampaignScheduleMonitor:
             agent_row = cursor.fetchone()
             robo_user = agent_row[0]
             robo_name = agent_row[1]
-            #cursor.execute(
-            #    f"""
-            #    SELECT id FROM manage_conversation_conversation 
-            #    WHERE organization_id={self.param} 
-            #    AND platform_id={self.param} AND contact_id={self.param}
-            #    """,
-            #    (organization.id, platform.id, recipient.id)
-            #)
-            #row = cursor.fetchone()
-            #if row:
-            #    conversation_id = row[0]
-            #else:
-            # Init conversation_id to non existing value to ensure it fails if we could
-            # not get the actual conversation_id after creating a new conversation for Agent
             conversation_id = -1
             cursor.execute(
                 f"""
@@ -296,27 +306,38 @@ class CampaignScheduleMonitor:
                 template=scheduled_message.template
             )
             self.logger.info("response %s %s %s", response, formatted_message, scheduled_message.template)
-            cursor.execute(
-                f"""
-                INSERT INTO manage_conversation_usermessage
-                (conversation_id, organization_id, platform_id, user_id, message_body, status, sent_time, messageid, template, message_type)
-                VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param}, {self.param})
-                """,
-                (
-                    conversation_id,
-                    organization.id,
-                    platform.id,
-                    robo_user,
-                    "TEMPLATE" if scheduled_message.template else str(formatted_message),
-                    'sent' if response['messages'][0].get('message_status') in self.MSG_SENT else 'failed',
-                    response['messages'][0].get('id'),
-                    str(self.format_template_messages(
-                        scheduled_message.template,
-                        {param['parameter_name']: param['text'] for param in formatted_message[recipient.phone]}
-                        if formatted_message.get(recipient.phone) else None
-                    )) if scheduled_message.template else str(formatted_message),
-                    "template"
-                )
+            #cursor.execute(
+            #    f"""
+            #    INSERT INTO manage_conversation_usermessage
+            #    (conversation_id, organization_id, platform_id, user_id, message_body, status, sent_time, messageid, template, message_type)
+            #    VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param}, {self.param})
+            #    """,
+            #    (
+            #        conversation_id,
+            #        organization.id,
+            #        platform.id,
+            #        robo_user,
+            #        "TEMPLATE" if scheduled_message.template else str(formatted_message),
+            #        'sent' if response['messages'][0].get('message_status') in self.MSG_SENT else 'failed',
+            #        response['messages'][0].get('id'),
+            #        str(self.format_template_messages(
+            #            scheduled_message.template,
+            #            {param['parameter_name']: param['text'] for param in formatted_message[recipient.phone]}
+            #            if formatted_message.get(recipient.phone) else None
+            #        )) if scheduled_message.template else str(formatted_message),
+            #        "template"
+            #    )
+            #)
+            self.update_user_message_model(
+                cursor,
+                response=response,
+                conversation_id=conversation_id,
+                organization=organization,
+                platform=platform,
+                robo_user=robo_user,
+                scheduled_message=scheduled_message,
+                formatted_message=formatted_message,
+                recipient=recipient
             )
             self.log_platform_activity(
                 conn,
@@ -330,6 +351,16 @@ class CampaignScheduleMonitor:
             return response['messages'][0].get('message_status') in self.MSG_SENT
         except Exception as e:
             traceback.print_exc()
+            self.update_user_message_model(
+                cursor,
+                conversation_id=conversation_id,
+                organization=organization,
+                platform=platform,
+                robo_user=robo_user,
+                scheduled_message=scheduled_message,
+                formatted_message=formatted_message,
+                recipient=recipient
+            )
             self.log_platform_activity(
                 conn,
                 org_id=scheduled_message.organization_id,
