@@ -2,6 +2,7 @@ import os
 import json
 import time
 import logging
+import traceback
 from contextlib import contextmanager
 from datetime import datetime
 from io import BytesIO
@@ -89,7 +90,6 @@ class WhatsAppKafkaConsumer:
             if auto_commit:
                 conn.commit()
         except Exception:
-            import traceback
             traceback.print_exc()
         finally:
             conn.close()
