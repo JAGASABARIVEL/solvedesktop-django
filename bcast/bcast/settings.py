@@ -117,6 +117,7 @@ INSTALLED_APPS = [
     'manage_conversation',
     'manage_subscriptions',
     'manage_files',
+    'manage_email',
     'manage_keylogger'
 ]
 
