@@ -5,6 +5,7 @@ import time
 import logging
 import sqlite3
 import psycopg2
+from types import SimpleNamespace
 from contextlib import contextmanager
 import datetime
 from dateutil.relativedelta import relativedelta
@@ -112,7 +113,6 @@ class CampaignScheduleMonitor:
                 )
 
     def log_platform_activity(self, conn, org_id, event_type, status, details, recipient_id, schedule_id):
-        import json
         details = json.dumps(details)
         cursor = conn.cursor()
         cursor.execute(
@@ -239,8 +239,8 @@ class CampaignScheduleMonitor:
         cursor.execute(
             f"""
             INSERT INTO manage_conversation_usermessage
-            (conversation_id, organization_id, platform_id, user_id, message_body, status, sent_time, messageid, template, message_type)
-            VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param}, {self.param})
+            (conversation_id, organization_id, platform_id, user_id, message_body, status, sent_time, messageid, template, message_type, status_details)
+            VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param}, {self.param}, {self.param})
             """,
             (
                 kwargs.get("conversation_id"),
@@ -255,7 +255,8 @@ class CampaignScheduleMonitor:
                     {param['parameter_name']: param['text'] for param in kwargs.get("formatted_message")[kwargs.get("recipient").phone]}
                     if kwargs.get("formatted_message").get(kwargs.get("recipient").phone) else None
                 )) if kwargs.get("scheduled_message").template else str(kwargs.get("formatted_message")),
-                "template"
+                "template",
+                kwargs.get("status_details")
             )
         )
 
@@ -306,28 +307,6 @@ class CampaignScheduleMonitor:
                 template=scheduled_message.template
             )
             self.logger.info("response %s %s %s", response, formatted_message, scheduled_message.template)
-            #cursor.execute(
-            #    f"""
-            #    INSERT INTO manage_conversation_usermessage
-            #    (conversation_id, organization_id, platform_id, user_id, message_body, status, sent_time, messageid, template, message_type)
-            #    VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param}, {self.param})
-            #    """,
-            #    (
-            #        conversation_id,
-            #        organization.id,
-            #        platform.id,
-            #        robo_user,
-            #        "TEMPLATE" if scheduled_message.template else str(formatted_message),
-            #        'sent' if response['messages'][0].get('message_status') in self.MSG_SENT else 'failed',
-            #        response['messages'][0].get('id'),
-            #        str(self.format_template_messages(
-            #            scheduled_message.template,
-            #            {param['parameter_name']: param['text'] for param in formatted_message[recipient.phone]}
-            #            if formatted_message.get(recipient.phone) else None
-            #        )) if scheduled_message.template else str(formatted_message),
-            #        "template"
-            #    )
-            #)
             self.update_user_message_model(
                 cursor,
                 response=response,
@@ -359,7 +338,8 @@ class CampaignScheduleMonitor:
                 robo_user=robo_user,
                 scheduled_message=scheduled_message,
                 formatted_message=formatted_message,
-                recipient=recipient
+                recipient=recipient,
+                status_details=str(e),
             )
             self.log_platform_activity(
                 conn,
@@ -373,7 +353,6 @@ class CampaignScheduleMonitor:
             return False
 
     def process_campaign_schedule_message(self):
-        from types import SimpleNamespace
         try:
             self.logger.info("Checking for scheduled messages")
             with self.get_conn() as conn:
