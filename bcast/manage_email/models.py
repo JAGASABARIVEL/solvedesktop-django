@@ -19,8 +19,10 @@ class GmailMessage(models.Model):
     thread_id = models.CharField(max_length=128)
     subject = models.CharField(max_length=512, null=True, blank=True)
     sender = models.EmailField(null=True, blank=True)
-    snippet = models.TextField(null=True, blank=True)
-    internal_date = models.DateTimeField()
+    to = models.TextField(null=True, blank=True)
+    cc = models.TextField(null=True, blank=True)
+    body = models.TextField(null=True, blank=True)
+    email_date = models.DateTimeField()
     labels = models.JSONField(default=list)
 
     created_at = models.DateTimeField(auto_now_add=True)
