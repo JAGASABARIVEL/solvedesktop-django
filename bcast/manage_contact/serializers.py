@@ -6,7 +6,7 @@ from .models import Contact, ContactGroup, GroupMember
 class ContactSerializer(serializers.ModelSerializer):
     class Meta:
         model = Contact
-        fields = ['id', 'name', 'description', 'phone', 'image', 'address', 'category', 'organization', 'created_by']
+        fields = ['id', 'name', 'description', 'phone', 'platform_name', 'image', 'address', 'category', 'organization', 'created_by']
         extra_kwargs = {
             'organization': {'read_only': True},
             'created_by': {'read_only': True},

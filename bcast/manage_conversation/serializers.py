@@ -23,6 +23,8 @@ class ContactSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
     phone = serializers.CharField()
+    image = serializers.CharField()
+    platform_name = serializers.CharField()
 
 
 class AssignedUserSerializer(serializers.Serializer):

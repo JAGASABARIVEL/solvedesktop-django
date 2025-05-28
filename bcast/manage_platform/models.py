@@ -3,7 +3,7 @@ from django.conf import settings
 
 # Create your models here.
 class Platform(models.Model):
-    PLATFORM_CHOICES = [('whatsapp', 'WhatsApp'), ('telegram', 'Telegram'), ('gmail', 'Gmail'), ('webchat', 'Webchat')]
+    PLATFORM_CHOICES = [('whatsapp', 'WhatsApp'), ('messenger', 'Messenger'), ('telegram', 'Telegram'), ('gmail', 'Gmail'), ('webchat', 'Webchat')]
 
     organization = models.ForeignKey(settings.ORG_MODEL, on_delete=models.CASCADE, related_name='platforms')
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='platforms')

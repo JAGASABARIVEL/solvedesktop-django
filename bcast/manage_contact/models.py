@@ -5,15 +5,11 @@ from django.db import models
 from django.conf import settings
 
 class Contact(models.Model):
-    PLATFORM_CHOICES = [
-        ('whatsapp', 'WhatsApp'),
-        ('telegram', 'Telegram'),
-        ('gmail', 'Gmail'),
-        ('webchat', 'Webchat')
-    ]
+    PLATFORM_CHOICES = [('whatsapp', 'WhatsApp'), ('messenger', 'Messenger'), ('telegram', 'Telegram'), ('gmail', 'Gmail'), ('webchat', 'Webchat')]
     name = models.TextField()
     description = models.TextField(blank=True, null=True)
     image = models.URLField(max_length=2048, blank=True, null=True)
+    image_expires_at = models.BigIntegerField(blank=True, null=True)  # milliseconds
     address = models.TextField(blank=True, null=True)
     category = models.TextField(blank=True, null=True)
     phone = models.TextField()

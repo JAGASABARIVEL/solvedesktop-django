@@ -1,6 +1,7 @@
 
 import json
 from datetime import datetime, timedelta, time, date
+import time as python_time
 from dateutil.relativedelta import relativedelta
 from collections import defaultdict
 import mimetypes
@@ -31,6 +32,7 @@ from .serializers import ConversationSerializer
 
 from VendorApi.Whatsapp.message import MediaMessage, TextMessage, TemplateMessage, WebHookException, SendException
 from VendorApi.Webchat.message import TextMessage as webTextMessage
+from VendorApi.Messenger.message import TextMessage as MessengerTextMessage
 
 
 User = get_user_model()
@@ -121,6 +123,24 @@ def send_message(platform_id, recipient_id, message_body, template=None, message
                 # Right now we dont have anyother way to confirm the delivery since its through websocket and not webhook to confirm the delivery
                 incoming_messages = IncomingMessage.objects.filter(conversation=conversation).update(status='responded')
             return response
+        elif platform_name.startswith('messenger'):
+            print(
+                "Message Sent!!\n",
+                "Platform : ", platform_name, "\n",
+                "Login Id : ", phone_number_id, "\n",
+                "From Key : ", token, "\n",
+                "Recipient : ", recipient_phone_number, "\n",
+                "Message : ", message_body, "\n",
+            )
+            if message_type == "text":
+                text_message = MessengerTextMessage(
+                    phone_number_id=phone_number_id,
+                    token=token,
+                )
+                response = text_message.send_message(recipient_phone_number, message_body)
+                return response
+            else:
+                raise ValueError(f"Unsupported message type received on {platform_name}")
         else:
             raise ValueError(f"Unsupported platform {platform_name}")
     except WebHookException as webhook_error:
@@ -447,7 +467,13 @@ class ConversationViewSet(viewsets.ModelViewSet):
                     message_type=message_type,
                     conversation=conversation
                 )
-            message_id = response.json().get('messages', [{}])[0].get('id', 'unknown') if response else None
+            message_id = None
+            platform = Platform.objects.get(id=conversation.platform_id)
+            platform_name = platform.platform_name
+            if platform_name.startswith('messenger'):
+                message_id = int(python_time.time() * 1000)  # milliseconds
+            else:
+                message_id = response.json().get('messages', [{}])[0].get('id', 'unknown') if response else None
             status_value = 'sent_to_server'
             error_message = None
         except Exception as e:

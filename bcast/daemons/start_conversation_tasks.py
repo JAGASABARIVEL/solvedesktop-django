@@ -110,12 +110,24 @@ class WhatsAppKafkaConsumer:
             "auto.offset.reset": "earliest",
             "enable.auto.commit": True
         }
-
+    
     def process_message(self, message):
         if message["msg_from_type"] == "CUSTOMER":
-            self.handle_customer_message(message)
+            self.handle_customer_messages(message)
         elif message["msg_from_type"] == "ORG":
-            self.handle_org_message(message)
+            self.handle_org_messages(message)
+
+    def handle_customer_messages(self, message):
+        if message["app_name"] == "WHATSAPP":
+            self.handle_customer_message_whatsapp(message)
+        elif  message["app_name"] == "MESSENGER":
+            self.handle_customer_message_messenger(message)
+
+    def handle_org_messages(self, message):
+        if message["app_name"] == "WHATSAPP":
+            self.handle_org_message_whatsapp(message)
+        elif  message["app_name"] == "MESSENGER":
+            self.handle_org_message_messenger(message)
 
     def requests_auth_header(self, token):
         return {"Authorization": f"Bearer {token}"}
@@ -350,7 +362,7 @@ class WhatsAppKafkaConsumer:
         
         return file_id
 
-    def handle_customer_message(self, msg_data):
+    def handle_customer_message_whatsapp(self, msg_data):
         try:
             recipient_id = msg_data['recipient_id']
             message_type = msg_data['msg_type']
@@ -442,9 +454,9 @@ class WhatsAppKafkaConsumer:
                 self.logger.info("New customer message saved for conversation_id: %s", conversation_id)
                 self.sio.emit("whatsapp_chat", payload)
         except Exception as e:
-            self.logger.error("Error in handle_customer_message: %s", e, exc_info=True)
+            self.logger.error("Error in handle_customer_message_whatsapp: %s", e, exc_info=True)
 
-    def handle_org_message(self, msg_data):
+    def handle_org_message_whatsapp(self, msg_data):
         try:
             message_id = msg_data['message_id']
             message_status = msg_data['message_status']
@@ -476,7 +488,180 @@ class WhatsAppKafkaConsumer:
                         'organization_id': organization_id,
                     })
         except Exception as e:
-            self.logger.error("Error in handle_org_message: %s", e, exc_info=True)
+            self.logger.error("Error in handle_org_message_whatsapp: %s", e, exc_info=True)
+
+
+    @staticmethod
+    def get_messenger_user_profile(psid, page_access_token):
+        url = f"https://graph.facebook.com/v18.0/{psid}"
+        params = {
+            "fields": "first_name,last_name,profile_pic",
+            "access_token": page_access_token
+        }
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            return response.json()  # {first_name, last_name, profile_pic}
+        else:
+            return {}
+
+    def handle_customer_message_messenger(self, message):
+        try:
+            page_owner_id=message["page_owner_id"]
+            sender_id=message["sender_id"]['id']
+            message_status=message["message_status"]
+            msg=message["msg"]
+            message_type=message["msg_type"]
+            timestamp=message["timestamp"]
+            with self.get_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"SELECT id, owner_id, login_credentials FROM manage_platform_platform WHERE login_id={self.param}", (page_owner_id,))
+                platform_row = cursor.fetchone()
+                if not platform_row:
+                    self.logger.warning("Platform not found for phone_number_id: %s", page_owner_id)
+                    return
+                platform_id, owner_id, login_credentials = platform_row
+                
+                cursor.execute(f"SELECT id, owner_id FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
+                org_row = cursor.fetchone()
+                if not org_row:
+                    self.logger.warning("Organization not found for owner_id: %s", owner_id)
+                    return
+                organization_id, org_owner_id = org_row
+                contact_id, contact_name = None, None
+                expires_at = int(time.time() * 1000) + 24 * 60 * 60 * 1000
+                current_ms = int(time.time() * 1000)
+                cursor.execute(f"SELECT id, name, image_expires_at FROM manage_contact_contact WHERE phone={self.param} AND organization_id={self.param}", (sender_id, organization_id))
+                contact_row = cursor.fetchone()
+                if contact_row:
+                    contact_id, contact_name, image_expires_at = contact_row
+                    # Check if image_expires_at is null or expired
+                    if image_expires_at is None or int(image_expires_at) < current_ms:
+                        # Refresh profile
+                        profile = WhatsAppKafkaConsumer.get_messenger_user_profile(sender_id, login_credentials)
+                        sender_name = profile.get("first_name")
+                        profile_pic_url = profile.get("profile_pic")
+                
+                        # Update contact with new image and expiry time
+                        cursor.execute(
+                            f"""UPDATE manage_contact_contact
+                                SET image={self.param}, image_expires_at={self.param}, name={self.param}, updated_at={self.param}
+                                WHERE id={self.param}""",
+                            (profile_pic_url, expires_at, sender_name, datetime.now(), contact_id)
+                        )
+                else:
+                    profile = WhatsAppKafkaConsumer.get_messenger_user_profile(sender_id, login_credentials)
+                    sender_name = profile.get("first_name")
+                    profile_pic_url = profile.get("profile_pic")
+                    cursor.execute(
+                        f"INSERT INTO manage_contact_contact (phone, name, image, image_expires_at, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id, name",
+                        (sender_id, sender_name, profile_pic_url, expires_at, organization_id, org_owner_id, 'messenger', datetime.now(), datetime.now())
+                    )
+                    contact_id, contact_name = cursor.fetchone()
+                is_conversation_new = True
+                cursor.execute(f"""
+                    SELECT id FROM manage_conversation_conversation
+                    WHERE contact_id={self.param} AND platform_id={self.param} AND organization_id={self.param} AND status IN ('new', 'active')
+                    ORDER BY created_at DESC LIMIT 1
+                """, (contact_id, platform_id, organization_id))
+                conv_row = cursor.fetchone()
+                if conv_row:
+                    conversation_id = conv_row[0]
+                    is_conversation_new = False
+                else:
+                    cursor.execute(f"""
+                        INSERT INTO manage_conversation_conversation (contact_id, platform_id, organization_id, open_by, status, created_at, updated_at)
+                        VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id
+                    """, (contact_id, platform_id, organization_id, 'customer', 'new', datetime.now(), datetime.now()))
+                    conversation_id = cursor.fetchone()[0]
+                cursor.execute(f"""
+                    INSERT INTO manage_conversation_incomingmessage (conversation_id, contact_id, platform_id, organization_id, message_body, message_type, status_details, status, received_time, created_at)
+                    VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, 'unread', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    RETURNING id, received_time, status, status_details
+                """, (conversation_id, contact_id, platform_id, organization_id, msg, message_type, None))
+                msg_row = cursor.fetchone()
+                payload = {
+                    'id': contact_id,
+                    'conversation_id': conversation_id,
+                    'received_time': msg_row[1].isoformat() if not self.use_sqlite else msg_row[1],
+                    'message_type': message_type,
+                    'message_body': msg,
+                    'status': msg_row[2],
+                    'status_details': msg_row[3],
+                    'type': 'customer',
+                    'msg_from_type': 'CUSTOMER',
+                    'organization_id': organization_id,
+                    'customer_name': contact_name,
+                    'is_conversation_new': is_conversation_new
+                }
+                self.logger.info("New customer message saved for conversation_id: %s", conversation_id)
+                self.sio.emit("whatsapp_chat", payload)
+        except Exception as e:
+            self.logger.error("Error in handle_customer_message_whatsapp: %s", e, exc_info=True)
+
+    def handle_org_message_messenger(self, message):
+        try:
+            page_owner_id=message["page_owner_id"]
+            sender_id=message["sender_id"]['id']
+            message_status=message["message_status"]
+            timestamp=message["timestamp"]
+            with self.get_conn() as conn:
+                # Step 1: Get conversation and organization based on sender_id and page_owner_id
+                cursor = conn.cursor()
+                cursor.execute(f"SELECT id, owner_id, login_credentials FROM manage_platform_platform WHERE login_id={self.param}", (page_owner_id,))
+                platform_row = cursor.fetchone()
+                if not platform_row:
+                    self.logger.warning("Platform not found for phone_number_id: %s", page_owner_id)
+                    return
+                platform_id, owner_id, login_credentials = platform_row
+                
+                cursor.execute(f"SELECT id, owner_id FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
+                org_row = cursor.fetchone()
+                if not org_row:
+                    self.logger.warning("Organization not found for owner_id: %s", owner_id)
+                    return
+                organization_id, org_owner_id = org_row
+
+                contact_id, contact_name = None, None
+                cursor.execute(f"SELECT id, name FROM manage_contact_contact WHERE phone={self.param} AND organization_id={self.param}", (sender_id, organization_id))
+                contact_row = cursor.fetchone()
+                if contact_row:
+                    contact_id, contact_name = contact_row
+                    cursor.execute(f"""
+                        SELECT id FROM manage_conversation_conversation 
+                        WHERE platform_id={self.param} AND contact_id={self.param} 
+                        AND status='active'
+                    """, (platform_id, contact_id))
+                    convo = cursor.fetchone()
+                
+                    if convo:
+                        conversation_id = convo[0]
+                        # Step 2: Update user messages for this conversation with lower message IDs
+                        cursor.execute(f"""
+                            UPDATE manage_conversation_usermessage
+                            SET status={self.param} 
+                            WHERE conversation_id={self.param} AND messageid~'^[0-9]+$' AND CAST(messageid AS BIGINT)<={self.param}
+                        """, (message_status, conversation_id, timestamp))
+    
+                        # Step 3: Mark the incoming message as responded
+                        cursor.execute(f"""
+                            UPDATE manage_conversation_incomingmessage SET status='responded' WHERE conversation_id={self.param}
+                        """, (conversation_id,))
+    
+                        self.logger.info("Messenger | Updated message status for conversation_id: %s", conversation_id)
+    
+                        self.sio.emit("whatsapp_chat", {
+                            "conversation_id": conversation_id,
+                            "msg_from_type": "ORG",
+                            'organization_id': organization_id,
+                        })
+                    else:
+                        self.logger.info("Messenger | Active conversation not found")
+                else:
+                    self.logger.info("Messenger | User not found in contact")
+        except Exception as e:
+            self.logger.error("Error in handle_org_message_messenger: %s", e, exc_info=True)
+
+
     
     def handle_website_chatwidget_messages(self, data):
         try:
