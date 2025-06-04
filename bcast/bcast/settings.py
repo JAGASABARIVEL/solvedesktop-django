@@ -159,6 +159,7 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = [
     "https://jackdesk.com",
     "http://localhost:4200",
+    "http://localhost:8100",
 ]
 
 CSRF_TRUSTED_ORIGINS = [

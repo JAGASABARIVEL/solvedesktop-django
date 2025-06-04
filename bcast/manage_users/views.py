@@ -79,7 +79,6 @@ class GmailOAuthCallback(APIView):
         }
         response = requests.post(token_url, data=data)
         token_data = response.json()
-        print("token_data ", token_data)
 
         # Extract info
         access_token = token_data.get("access_token")

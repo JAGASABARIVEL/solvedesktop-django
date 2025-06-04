@@ -4,9 +4,11 @@ import time
 import logging
 import traceback
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 import sqlite3
+import mimetypes
+import pytz
 
 import jwt
 import psycopg2
@@ -181,6 +183,25 @@ class WhatsAppKafkaConsumer:
                     can_write = EXCLUDED.can_write;
             """, (file_id, employee[0], True, True, True))
 
+    
+
+    def generate_presigned_url(self, s3_client, object_key, expiry_seconds=3600):
+        # Guess the MIME type from the object_key
+        content_type, _ = mimetypes.guess_type(object_key)
+        if content_type is None:
+            content_type = 'application/octet-stream'  # Fallback for unknown types
+    
+        url = s3_client.generate_presigned_url(
+            ClientMethod='get_object',
+            Params={
+                'Bucket': os.getenv("B2_STORAGE_BUCKET_NAME"),
+                'Key': object_key,
+                'ResponseContentDisposition': 'inline',
+                'ResponseContentType': content_type,
+            },
+            ExpiresIn=expiry_seconds
+        )
+        return url
 
     def save_media_file_to_s3_raw_sql(self, conn, user_identifier: str, receiver_name: str, filename: str, file_data: BytesIO):
         # 1. Look up user and org
@@ -222,6 +243,7 @@ class WhatsAppKafkaConsumer:
             aws_access_key_id=os.getenv("B2_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("B2_SECRET_ACCESS_KEY"),
             config=Config(signature_version="s3v4"),
+            region_name='us-west-002'  # ✅ Add your correct region name here if required
         )
 
         s3.put_object(Bucket=os.getenv("B2_STORAGE_BUCKET_NAME"), Key=home_directory_key)
@@ -341,13 +363,16 @@ class WhatsAppKafkaConsumer:
             """, (today, user_id, date_folder_key, parent, False))
             parent =  cursor.fetchone()[0]
         self.provide_permission(cursor, org_id, parent, user_id)
-    
+
         # 10. Insert file under date folder
+        signed_url = self.generate_presigned_url(s3, file_key)
+        utc = pytz.utc
+        signed_url_expires_at = datetime.now(utc) + timedelta(seconds=86400)
         cursor.execute(f"""
-            INSERT INTO manage_files_file (name, owner_id, s3_key, parent_id, created_at, size_gb, is_deleted)
-            VALUES ({self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param})
+            INSERT INTO manage_files_file (name, owner_id, s3_key, parent_id, created_at, size_gb, is_deleted, signed_url, signed_url_expires_at)
+            VALUES ({self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP, {self.param}, {self.param}, {self.param}, {self.param})
             RETURNING id;
-        """, (filename, user_id, file_key, parent, size_gb, False))
+        """, (filename, user_id, file_key, parent, size_gb, False, signed_url, signed_url_expires_at))
         self.logger.info(f"✅ Uploaded to {file_key}")
         file_id = cursor.fetchone()[0]
         self.provide_permission(cursor, org_id, file_id, user_id)
@@ -360,7 +385,7 @@ class WhatsAppKafkaConsumer:
         """, (file_id, filename, user_id, size_gb))
 
         
-        return file_id
+        return file_id, signed_url
 
     def handle_customer_message_whatsapp(self, msg_data):
         try:
@@ -379,6 +404,7 @@ class WhatsAppKafkaConsumer:
                     return
                 platform_id, owner_id, login_credentials = platform_row
 
+                signed_url = None
                 if message_type != "text":
                     message_body_copy = message_body_copy.get("caption")
                     cursor.execute(f"SELECT user_id from manage_users_enterpriseprofile where user_id={self.param}", (owner_id,))
@@ -393,7 +419,10 @@ class WhatsAppKafkaConsumer:
                         raise Exception("User not found in main user profile")
                     owner_email = owner_user_profile[0]
                     with self.download_from_provider(message_body.get("media_id"), login_credentials) as file_data:
-                        file_id = self.save_media_file_to_s3_raw_sql(conn, owner_email, recipient_id, message_body.get("caption"), file_data)
+                        media_file_name = message_body.get("caption")
+                        if message_type in ("image/jpeg", "image/png"):
+                            media_file_name = message_body.get("caption") + "." + message_type.split('/')[-1]
+                        file_id, signed_url = self.save_media_file_to_s3_raw_sql(conn, owner_email, recipient_id, media_file_name, file_data)
 
                 cursor.execute(f"SELECT id, owner_id FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
                 org_row = cursor.fetchone()
@@ -449,7 +478,8 @@ class WhatsAppKafkaConsumer:
                     'msg_from_type': 'CUSTOMER',
                     'organization_id': organization_id,
                     'customer_name': contact_name,
-                    'is_conversation_new': is_conversation_new
+                    'is_conversation_new': is_conversation_new,
+                    'media_url': signed_url
                 }
                 self.logger.info("New customer message saved for conversation_id: %s", conversation_id)
                 self.sio.emit("whatsapp_chat", payload)

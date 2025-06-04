@@ -1,9 +1,41 @@
 import uuid
+import mimetypes
+from dateutil.relativedelta import relativedelta
+from datetime import timedelta
+
+from django.utils import timezone
 from django.db import models
 from django.conf import settings
-from django.utils import timezone
-from dateutil.relativedelta import relativedelta
 
+import boto3
+from botocore.client import Config
+
+
+def generate_presigned_url(object_key, expiry_seconds=3600):
+    # Guess the MIME type from the object_key
+    content_type, _ = mimetypes.guess_type(object_key)
+    if content_type is None:
+        content_type = 'application/octet-stream'  # Fallback for unknown types
+
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=settings.B2_ENDPOINT_URL,
+        aws_access_key_id=settings.B2_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.B2_SECRET_ACCESS_KEY,
+        config=Config(signature_version='s3v4'),
+        region_name='us-west-002'  # ✅ Add your correct region name here if required
+    )
+    url = s3_client.generate_presigned_url(
+        ClientMethod='get_object',
+        Params={
+            'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+            'Key': object_key,
+            'ResponseContentDisposition': 'inline',
+            'ResponseContentType': content_type,
+        },
+        ExpiresIn=expiry_seconds
+    )
+    return url
 
 class File(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -13,6 +45,17 @@ class File(models.Model):
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE)  # Folder hierarchy
     created_at = models.DateTimeField(auto_now_add=True)
     is_deleted = models.BooleanField(default=False)
+    signed_url = models.TextField(null=True, blank=True)
+    signed_url_expires_at = models.DateTimeField(null=True, blank=True)
+
+    def is_signed_url_valid(self):
+        return self.signed_url and self.signed_url_expires_at and self.signed_url_expires_at > timezone.now()
+
+    def refresh_signed_url(self, expiry_seconds=86400):#24 hours expiry by default
+        signed_url = generate_presigned_url(self.s3_key, expiry_seconds=expiry_seconds)
+        self.signed_url = signed_url
+        self.signed_url_expires_at = timezone.now() + timedelta(seconds=expiry_seconds)
+        self.save(update_fields=["signed_url", "signed_url_expires_at"])
 
     def is_folder(self):
         return self.s3_key.endswith("/")  # Folders are just keys ending with "/"

@@ -230,6 +230,7 @@ s3 = boto3.client(
     aws_access_key_id=settings.B2_ACCESS_KEY_ID,
     aws_secret_access_key=settings.B2_SECRET_ACCESS_KEY,
     config=Config(signature_version="s3v4"),
+    region_name='us-west-002'  # ✅ Add your correct region name here if required
 )
 
 class FolderCreateView(generics.CreateAPIView):
@@ -563,6 +564,7 @@ class FileDeleteView(generics.DestroyAPIView):
             print("S3 Deletion Error:", e)
 
 
+import mimetypes
 class FileDownloadView(APIView):
     permission_classes = [EnterpriseIndividualUsers]
 
@@ -590,9 +592,25 @@ class FileDownloadView(APIView):
             )
             file_size = s3_object.get('ContentLength', 0)
 
+            # Guess the MIME type from the object_key
+            content_type, _ = mimetypes.guess_type(file.s3_key)
+            if content_type is None:
+                content_type = 'application/octet-stream'  # Fallback for unknown types
+
+            #signed_url = s3.generate_presigned_url(
+            #    "get_object",
+            #    Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": file.s3_key},
+            #    ExpiresIn=3600
+            #)
+
             signed_url = s3.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": file.s3_key},
+                ClientMethod='get_object',
+                Params={
+                    'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+                    'Key': file.s3_key,
+                    'ResponseContentDisposition': 'inline',
+                    'ResponseContentType': content_type,
+                },
                 ExpiresIn=3600
             )
 

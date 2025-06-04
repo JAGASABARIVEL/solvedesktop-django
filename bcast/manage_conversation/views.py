@@ -43,6 +43,7 @@ s3 = boto3.client(
     aws_access_key_id=settings.B2_ACCESS_KEY_ID,
     aws_secret_access_key=settings.B2_SECRET_ACCESS_KEY,
     config=Config(signature_version="s3v4"),
+    region_name='us-west-002'  # ✅ Add your correct region name here if required
 )
 
 ALLOWED_MIME_TYPES = {
@@ -112,13 +113,11 @@ def send_message(platform_id, recipient_id, message_body, template=None, message
                 )
                 return response
         elif platform_name == "webchat":
-            print("Sending message in webchat platform to ", {recipient_phone_number, message_body})
             text_message = webTextMessage(
                 token=token,
             )
             response = text_message.send_message(recipient_phone_number, message_body)
             conversation = kwargs.get('conversation')
-            print("conversation ", conversation)
             with transaction.atomic():
                 # Right now we dont have anyother way to confirm the delivery since its through websocket and not webhook to confirm the delivery
                 incoming_messages = IncomingMessage.objects.filter(conversation=conversation).update(status='responded')
@@ -284,6 +283,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Cannot respond to a closed conversation'}, status=status.HTTP_400_BAD_REQUEST)
         conversation.status = 'active'
         conversation.updated_at = now()
+        conversation.assigned_user=user
         conversation.save()
         media_file = request.FILES.get('file')
         mime_type, _ = mimetypes.guess_type(media_file.name) if media_file else (None, None)
@@ -292,9 +292,24 @@ class ConversationViewSet(viewsets.ModelViewSet):
         template = request.POST.get('template') or request.data.get('template')
         file_instance = None
         message_type = "text"
+        if media_file and not media_type:
+            error_message = f"{mime_type} is not currently supported by whatsapp"
+            UserMessage.objects.create(
+                conversation=conversation,
+                organization=conversation.organization,
+                platform=platform,
+                user=user,
+                message_body=message_body,
+                status='failed',
+                template=template,
+                status_details=error_message, # Using status_dertauls to persists file id since it would None if there are no errors
+                message_type=mime_type
+            )
+            return Response({'error': 'Unsupported media', 'details': error_message}, status=status.HTTP_400_BAD_REQUEST)
         try:
             response = None
             if media_file and media_type:
+                
                 message_type = mime_type
                 # Send the message after uploading
                 response = send_message(
@@ -317,6 +332,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                     filename = media_file.name
                     customer_directory = "customer"
                     sent_directory_name = "sent"
+                    media_file.seek(0)
 
                     # Generate S3 keys
                     home_directory_key = f"{uname}/"
@@ -435,6 +451,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                         parent=date_folder,
                         size_gb=size_gb,
                     )
+                    file_instance.refresh_signed_url()
                     # Create FileStorageEvent
                     FileStorageEvent.objects.create(
                         user=owner_user,

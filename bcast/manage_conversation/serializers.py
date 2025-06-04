@@ -1,22 +1,50 @@
 from rest_framework import serializers
+from manage_files.models import File
 from .models import Conversation, IncomingMessage, UserMessage
 
 
 class IncomingMessageSerializer(serializers.ModelSerializer):
     type = serializers.CharField(default='customer')
+    media_url = serializers.SerializerMethodField()
 
     class Meta:
         model = IncomingMessage
-        fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'received_time')
-
+        fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'received_time', 'media_url')
+    
+    def get_media_url(self, obj):
+        if obj.message_type not in ['text', 'template']:
+            file_id = int(obj.status_details or -1)
+            if file_id:
+                try:
+                    file = File.objects.get(id=file_id)
+                    if not file.is_signed_url_valid():
+                        file.refresh_signed_url()
+                    return file.signed_url
+                except File.DoesNotExist:
+                    return None
+        return None
 
 class UserMessageSerializer(serializers.ModelSerializer):
     type = serializers.CharField(default='org')
     sender = serializers.IntegerField(source='user_id')
+    media_url = serializers.SerializerMethodField()
 
     class Meta:
         model = UserMessage
-        fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'sent_time', 'sender', 'template')
+        fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'sent_time', 'sender', 'template', 'media_url')
+    
+    def get_media_url(self, obj):
+        if obj.message_type not in ['text', 'template'] and obj.status != 'failed':
+            file_id = int(obj.status_details or -1)
+            if file_id:
+                try:
+                    file = File.objects.get(id=file_id)
+                    if not file.is_signed_url_valid():
+                        file.refresh_signed_url()
+                    return file.signed_url
+                except File.DoesNotExist:
+                    return None
+        return None
 
 
 class ContactSerializer(serializers.Serializer):
