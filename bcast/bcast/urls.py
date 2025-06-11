@@ -27,8 +27,8 @@ urlpatterns = [
     path('group-members/', include('manage_contact.urls_group_members')),
     path('conversations/', include('manage_conversation.urls')),
     path('campaign/', include('manage_campaign.urls')),
-    path('keylogger/', include('manage_keylogger.urls')),
     path('files/', include('manage_files.urls')), # new
     path('subscriptions/', include('manage_subscriptions.urls')),
+    path('productivity/', include('manage_productivity_tracker.urls'))
     #path("auth/", include("rest_framework.urls")), # added
 ]

@@ -59,6 +59,7 @@ class WhatsAppKafkaConsumer:
         self.group_id = os.getenv("KAFKA_CONFIG_GRP_ID")
         self.sio = socketio.Client()
         self.access_token = generate_forever_token()
+        self.retry_org_queue = {"whatsapp": []}
         if not self.access_token:
             raise Exception("Cannot generate access token to connect with websocket server")
         self.sio.connect(os.getenv("SOCKET_URL").format(access_token=self.access_token))
@@ -488,6 +489,7 @@ class WhatsAppKafkaConsumer:
 
     def handle_org_message_whatsapp(self, msg_data):
         try:
+            self.logger.info("Handling ORG level notification for whatsapp %s", msg_data)
             message_id = msg_data['message_id']
             message_status = msg_data['message_status']
             error_details = msg_data.get("error_details", None)
@@ -498,10 +500,12 @@ class WhatsAppKafkaConsumer:
                 if row:
                     user_message_id, conversation_id, organization_id = row
                     if error_details:
+                        self.logger.info("Found error_details")
                         cursor.execute(f"""
                             UPDATE manage_conversation_usermessage SET status={self.param}, status_details={self.param} WHERE id={self.param}
                         """, (message_status, json.dumps(error_details), user_message_id))
                     else:
+                        self.logger.info("No error_details found")
                         cursor.execute(f"""
                             UPDATE manage_conversation_usermessage SET status={self.param} WHERE id={self.param}
                         """, (message_status, user_message_id))
@@ -517,9 +521,18 @@ class WhatsAppKafkaConsumer:
                         "msg_from_type": "ORG",
                         'organization_id': organization_id,
                     })
+                else:
+                    self.retry_org_queue["whatsapp"].append(msg_data)
         except Exception as e:
-            self.logger.error("Error in handle_org_message_whatsapp: %s", e, exc_info=True)
+            self.logger.critical("Error in handle_org_message_whatsapp: %s", e, exc_info=True)
 
+
+    def retry_whatsapp_org_task(self):
+        while True:
+            if self.retry_org_queue["whatsapp"]:
+                self.handle_org_message_whatsapp(self.retry_org_queue["whatsapp"].pop())
+            else:
+                time.sleep(60)
 
     @staticmethod
     def get_messenger_user_profile(psid, page_access_token):
@@ -827,9 +840,12 @@ class WhatsAppKafkaConsumer:
             self.logger.info("Closing long running main thread")
 
 
-
+from threading import Thread
 if __name__ == "__main__":
     if os.environ["PRODUCTION"] == '1':
-        WhatsAppKafkaConsumer().consume()
+        consumer = WhatsAppKafkaConsumer()
+        whatsapp_org_incomplete_task = Thread(target=consumer.retry_whatsapp_org_task, daemon=True)
+        whatsapp_org_incomplete_task.start()
+        consumer.consume()
     else:
         WhatsAppKafkaConsumer().devlmode()

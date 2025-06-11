@@ -73,26 +73,54 @@ class TemplateMessage(Message):
         }
 
     
-    def send_message(self, recipient_id, message_body, template):
+    def send_message(self, recipient_id, message_body, template, file_obj=None, mime_type=None):
         template_obj = template
         if isinstance(template_obj, str):
             template_obj = json.loads(template)
-        payload = {}
-        if message_body in [None, 'TEMPLATE']:
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": recipient_id,
-                "type": "template",
-                "template": { "name": template_obj["name"], "language": { "code": template_obj["language"] } }
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_id,
+            "type": "template",
+            "template": { "name": template_obj["name"], "language": { "code": template_obj["language"] } }
+        }
+        # Default payload
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_id,
+            "type": "template",
+            "template": {
+                "name": template_obj["name"],
+                "language": {"code": template_obj["language"]},
+                "components": []
             }
-        else:
-
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": recipient_id,
-                "type": "template",
-                "template": { "name": template_obj["name"], "language": { "code": template_obj["language"] }, **self.template_payload_body(message_body)}
-            }
+        }
+        # --- Handle HEADER with DOCUMENT format ---
+        header_component = next((c for c in template_obj.get("components", []) if c.get("type") == "HEADER"), None)
+        if header_component and header_component.get("format") == "DOCUMENT" and file_obj:
+            media_id = MediaMessage(self.phone_number_id, self.token).upload_media(file_obj, mime_type)
+            payload["template"]["components"].append({
+                "type": "HEADER",
+                "parameters": [
+                    {
+                        "type": "document",
+                        "document": {
+                            "id": media_id
+                        }
+                    }
+                ]
+            })
+        # --- Handle BODY parameters ---
+        if message_body not in [None, 'TEMPLATE']:
+            #payload = {
+            #    "messaging_product": "whatsapp",
+            #    "to": recipient_id,
+            #    "type": "template",
+            #    "template": { "name": template_obj["name"], "language": { "code": template_obj["language"] }, **self.template_payload_body(message_body)}
+            #}
+            payload["template"]["components"].append({
+                "type": "BODY",
+                "parameters": message_body
+            })
         
         response = requests.post(
             self.send_url,

@@ -53,6 +53,7 @@ CELERY_TASK_SERIALIZER = 'json'
 
 # Google Secrets
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID")
+GOOGLE_DESKTOP_CLIENT_ID = config("GOOGLE_DESKTOP_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = config("GOOGLE_CLIENT_SECRET")
 
 # SMTP configuration
@@ -76,7 +77,7 @@ B2_SECRET_ACCESS_KEY = config("B2_SECRET_ACCESS_KEY")
 B2_STORAGE_BUCKET_NAME = config("B2_STORAGE_BUCKET_NAME")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = [
     "127.0.0.1",
@@ -118,7 +119,7 @@ INSTALLED_APPS = [
     'manage_subscriptions',
     'manage_files',
     'manage_email',
-    'manage_keylogger'
+    'manage_productivity_tracker'
 ]
 
 MIDDLEWARE = [
@@ -189,12 +190,12 @@ WSGI_APPLICATION = 'bcast.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-#DATABASES = {
-#    'default': {
-#        'ENGINE': 'django.db.backends.sqlite3',
-#        'NAME': BASE_DIR / 'db.sqlite3',
-#    }
-#}
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
 
 
 DATABASES = {

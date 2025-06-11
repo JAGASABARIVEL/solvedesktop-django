@@ -96,7 +96,7 @@ def send_message(platform_id, recipient_id, message_body, template=None, message
                     phone_number_id=platform.login_id,
                     token=platform.login_credentials
                 )
-                response = approved_templates.send_message(recipient_phone_number, message_body, template)
+                response = approved_templates.send_message(recipient_phone_number, message_body, template, file_obj=kwargs.get("media_file"), mime_type=kwargs.get("mime_type"))
                 return response
             elif message_type == "media":
                 media_message = MediaMessage(
@@ -149,20 +149,20 @@ def send_message(platform_id, recipient_id, message_body, template=None, message
     except Exception as e:
         raise RuntimeError(f"Failed to send message: {str(e)}")
 
-
 def format_template_messages(template, parameters_body):
-    if isinstance(template, str):
+        if not parameters_body:
+            return json.dumps(template)
         template = json.loads(template)
-    for component in template.get('components'):
-        for buffer in parameters_body.keys():
-            try:
-                parameter_index = component["text"].index(buffer)
-                start_index = parameter_index - 2 # {{
-                end_index = parameter_index + len(buffer) + 2 # parameter_name}}
-                component["text"] = component["text"].replace(component["text"][start_index : end_index], parameters_body[buffer])
-            except ValueError:
-                continue
-    return template
+        for component in template.get('components', []):
+            for buffer in parameters_body.keys():
+                try:
+                    parameter_index = component['text'].index(buffer)
+                    start_index = parameter_index - 2
+                    end_index = parameter_index + len(buffer) + 2
+                    component['text'] = component['text'].replace(component['text'][start_index:end_index], parameters_body[buffer])
+                except (ValueError, KeyError):
+                    continue
+        return json.dumps(template)
 
 
 from manage_files.models import File, FileStorageEvent, FilePermission
@@ -517,14 +517,33 @@ class ConversationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def new_conversation(self, request):
+        warning_message = None
+        file_instance = None
         user = request.user
         enterprise_profile = getattr(user, "enterprise_profile", None)
         organization = getattr(enterprise_profile, "organization", None)
+        owner_user = organization.owner
         platform_id = request.data.get('platform_id')
         contact_id = request.data.get('contact_id')
+        media_file = request.FILES.get('file')
+        mime_type, _ = mimetypes.guess_type(media_file.name) if media_file else (None, None)
         template = request.data.get('template')
-        message_body = request.data.get('template_parameters', {})
+        message_body = json.loads(request.data.get('template_parameters', "{}"))
         template_body = [{"type": "text", "parameter_name": key,  "text": value} for key, value in message_body.items()] or None
+
+        try:
+            response = send_message(
+                platform_id=platform_id,
+                recipient_id=contact_id,
+                message_body=template_body,
+                template=template,
+                message_type="template",
+                media_file=media_file,
+                mime_type=mime_type
+            )
+            message_id = response.json().get('messages', [{}])[0].get('id', 'unknown')
+        except Exception as open_error:
+            return Response({'error': str(open_error)}, status=status.HTTP_400_BAD_REQUEST)
         conversation = Conversation.objects.filter(
             organization=organization,
             platform_id=platform_id,
@@ -542,38 +561,175 @@ class ConversationViewSet(viewsets.ModelViewSet):
             status="active"
         )
         try:
-            response = send_message(
-                platform_id=platform_id,
-                recipient_id=contact_id,
-                message_body=template_body,
-                template=template,
-                message_type="template"
+            # Prepare variables
+            file_size = media_file.size
+            size_gb = file_size / (1024 ** 3)
+            uname = owner_user.email.split('@')[0]
+            org_name = conversation.organization.name.replace(" ", "_")
+            receiver_name = Contact.objects.get(id=conversation.contact_id).phone
+            receiver_directory = receiver_name.replace(" ", "_")
+            today_str = date.today().isoformat()
+            filename = media_file.name
+            customer_directory = "customer"
+            sent_directory_name = "sent"
+            media_file.seek(0)
+            # Generate S3 keys
+            home_directory_key = f"{uname}/"
+            org_directory_key = f"{home_directory_key}{org_name}/"
+            customer_directory_key = f"{org_directory_key}{customer_directory}/"
+            sent_directory_key = f"{customer_directory_key}{sent_directory_name}/"
+            receiver_folder_key = f"{sent_directory_key}{receiver_directory}/"
+            date_folder_key = f"{receiver_folder_key}{today_str}/"
+            file_key = f"{date_folder_key}{filename}"
+            # Upload placeholders for folders and file
+            s3.put_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=home_directory_key)
+            s3.put_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=org_directory_key)
+            s3.put_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=customer_directory_key)
+            s3.put_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=sent_directory_key)
+            s3.put_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=receiver_folder_key)
+            s3.put_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=date_folder_key)
+            s3.upload_fileobj(media_file, settings.AWS_STORAGE_BUCKET_NAME, file_key)
+            # Folder: Username
+            home_directory, _ = File.objects.get_or_create(
+                s3_key=home_directory_key,
+                owner=owner_user,
+                defaults={
+                    'name': uname,
+                    'parent': None,
+                    'size_gb': 0,
+                    'created_at': now(),
+                    'is_deleted': False
+                }
             )
-            message_id = response.json().get('messages', [{}])[0].get('id', 'unknown')
+            home_directory.is_deleted = False
+            home_directory.save()
+            # Folder: Orgname
+            org_directory, _ = File.objects.get_or_create(
+                s3_key=org_directory_key,
+                owner=owner_user,
+                defaults={
+                    'name': org_name,
+                    'parent': home_directory,
+                    'size_gb': 0,
+                    'created_at': now(),
+                    'is_deleted': False
+                }
+            )
+            org_directory.is_deleted = False
+            org_directory.save()
+            # Folder: Customer
+            customer_home_directory, _ = File.objects.get_or_create(
+                s3_key=customer_directory_key,
+                owner=owner_user,
+                defaults={
+                    'name': customer_directory,
+                    'parent': org_directory,
+                    'size_gb': 0,
+                    'created_at': now(),
+                    'is_deleted': False
+                }
+            )
+            customer_home_directory.is_deleted = False
+            customer_home_directory.save()
+            # Folder: Sent Directory
+            sent_directory, _ = File.objects.get_or_create(
+                s3_key=sent_directory_key,
+                owner=owner_user,
+                defaults={
+                    'name': sent_directory_name,
+                    'parent': customer_home_directory,
+                    'size_gb': 0,
+                    'created_at': now(),
+                    'is_deleted': False
+                }
+            )
+            sent_directory.is_deleted = False
+            sent_directory.save()
+            # Folder: Receiver
+            receiver_folder, _ = File.objects.get_or_create(
+                s3_key=receiver_folder_key,
+                owner=owner_user,
+                defaults={
+                    'name': receiver_directory,
+                    'parent': sent_directory,
+                    'size_gb': 0,
+                    'created_at': now(),
+                    'is_deleted': False
+                }
+            )
+            receiver_folder.is_deleted = False
+            receiver_folder.save()
+            # Folder: Date under Receiver
+            date_folder, _ = File.objects.get_or_create(
+                s3_key=date_folder_key,
+                owner=owner_user,
+                defaults={
+                    'name': today_str,
+                    'parent': receiver_folder,
+                    'size_gb': 0,
+                    'created_at': now(),
+                    'is_deleted': False
+                }
+            )
+            date_folder.is_deleted = False
+            date_folder.save()
+            # Actual File under Date folder
+            file_instance = File.objects.create(
+                name=filename,
+                owner=owner_user,
+                s3_key=file_key,
+                parent=date_folder,
+                size_gb=size_gb,
+            )
+            file_instance.refresh_signed_url()
+            # Create FileStorageEvent
+            FileStorageEvent.objects.create(
+                user=owner_user,
+                file_id=file_instance,
+                file_name=file_instance.name,
+                size_gb=size_gb
+            )
+            employees_of_org = EnterpriseProfile.objects.filter(organization=organization).all()
+            for employee in employees_of_org:
+                employee_user = employee.user
+                if employee_user.id == owner_user.id:
+                    continue                        
+                permission, created = FilePermission.objects.update_or_create(
+                    file=file_instance,
+                    user=employee_user,
+                    defaults={"can_read": True, "can_write": True}
+                )
+                permission.save()
         except Exception as e:
-            UserMessage.objects.create(
+            #UserMessage.objects.create(
+            #    conversation=conversation,
+            #    organization=organization,
+            #    platform_id=platform_id,
+            #    user=user,
+            #    message_body=message_body,
+            #    status='failed',
+            #    status_details=str(e),
+            #    messageid="Cannot send",
+            #    template=json.dumps(format_template_messages(template, message_body))
+            #)
+            #return Response({'error': 'Failed to deliver the message'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            warning_message = 'Message is successful but failed to store the media'
+        finally:
+            user_message_instance = UserMessage.objects.create(
                 conversation=conversation,
                 organization=organization,
                 platform_id=platform_id,
                 user=user,
                 message_body=message_body,
-                status='failed',
-                status_details=str(e),
-                messageid="Cannot send",
-                template=json.dumps(format_template_messages(template, message_body))
+                status='sent_to_server',
+                message_type='template',
+                messageid=message_id,
+                status_details=file_instance.id if file_instance else None,
+                template=format_template_messages(template, message_body)
             )
-            return Response({'error': 'Failed to deliver the message'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        UserMessage.objects.create(
-            conversation=conversation,
-            organization=organization,
-            platform_id=platform_id,
-            user=user,
-            message_body=message_body,
-            status='sent_to_server',
-            messageid=message_id,
-            template=json.dumps(format_template_messages(template, message_body))
-        )
-        return Response({'id': conversation.id}, status=status.HTTP_200_OK)
+            if warning_message:
+                return Response({'id': conversation.id, "warn": warning_message}, status=status.HTTP_200_OK)
+            return Response({'id': conversation.id}, status=status.HTTP_200_OK)
 
 
 class DateRangeHelper:

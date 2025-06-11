@@ -146,8 +146,10 @@ class GoogleLoginView(APIView):
         try:
             # Verify the Google token
             google_info = id_token.verify_oauth2_token(
-                google_token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
+                google_token, google_requests.Request()
             )
+            if google_info["aud"] not in [settings.GOOGLE_CLIENT_ID, settings.GOOGLE_DESKTOP_CLIENT_ID]:
+                return Response({"error": f"Invalid audience: {google_info['aud']}"}, status=status.HTTP_400_BAD_REQUEST)
             # Extract user info from the Google response
             email = google_info.get("email")
             username = google_info.get("name")

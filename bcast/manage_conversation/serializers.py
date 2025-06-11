@@ -34,7 +34,7 @@ class UserMessageSerializer(serializers.ModelSerializer):
         fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'sent_time', 'sender', 'template', 'media_url')
     
     def get_media_url(self, obj):
-        if obj.message_type not in ['text', 'template'] and obj.status != 'failed':
+        if obj.message_type not in ['text'] and obj.status_details not in [None] and obj.status != 'failed':
             file_id = int(obj.status_details or -1)
             if file_id:
                 try:
