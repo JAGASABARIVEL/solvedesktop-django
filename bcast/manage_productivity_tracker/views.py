@@ -6,6 +6,7 @@ from .serializers import AppUsageSerializer, AFKEventSerializer
 from django.contrib.auth import get_user_model
 from django.utils.dateparse import parse_datetime
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.status import HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS, HTTP_404_NOT_FOUND
 from rest_framework.decorators import permission_classes
 
 User = get_user_model()
@@ -32,43 +33,76 @@ def filter_time_range(queryset, request):
         queryset = queryset.filter(start_time__lte=end)
     return queryset
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_summary(request):
+    request_user = request.user
+    # Check if user is allowed
+    if not request_user.is_productivity_enable:
+        return Response({"error": "Not authorized to access this application"}, status=HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS)
+    # Get the organization of the requesting user
+    user_org = request_user.enterprise_profile.organization
+    app_qs = filter_time_range(AppUsage.objects.filter(user=request_user), request)
+    afk_qs = filter_time_range(AFKEvent.objects.filter(user=request_user), request)
+    total_active = app_qs.aggregate(total=Sum('duration'))['total'] or 0
+    total_afk = afk_qs.filter(is_afk=True).aggregate(total=Sum('duration'))['total'] or 0
+    total_logged = total_active + total_afk
+    productivity_score = (total_active / total_logged) * 100 if total_logged else 0
+    result = {
+        'user': request_user.username,
+        'productive_time_seconds': total_active,
+        'afk_time_seconds': total_afk,
+        'score': round(productivity_score, 1)
+    }
+    return Response(result)
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def org_summary(request):
-    users = User.objects.all()
+    request_user = request.user
+    # Check if user is allowed
+    if not request_user.is_productivity_enable:
+        return Response({"error": "Not authorized to access this application"}, status=HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS)
+    # Get the organization of the requesting user
+    user_org = request_user.enterprise_profile.organization
+    # Filter users by organization
+    users = User.objects.filter(enterprise_profile__organization=user_org)
     result = []
-
     for user in users:
         app_qs = filter_time_range(AppUsage.objects.filter(user=user), request)
         afk_qs = filter_time_range(AFKEvent.objects.filter(user=user), request)
-
         total_active = app_qs.aggregate(total=Sum('duration'))['total'] or 0
         total_afk = afk_qs.filter(is_afk=True).aggregate(total=Sum('duration'))['total'] or 0
         total_logged = total_active + total_afk
         productivity_score = (total_active / total_logged) * 100 if total_logged else 0
-
         result.append({
             'user': user.username,
             'productive_time_minutes': round(total_active / 60, 2),
             'afk_time_minutes': round(total_afk / 60, 2),
             'score': round(productivity_score, 1)
         })
-
     return Response(result)
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def user_detail(request, user_id):
-    user = User.objects.get(id=user_id)
+    request_user = request.user
+    if not request_user.is_productivity_enable:
+        return Response({"error": "Not authorized to access this application"}, status=HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS)
+    user_org = request_user.enterprise_profile.organization
+    try:
+        # Fetch the user and ensure they belong to the same organization
+        user = User.objects.get(id=user_id, enterprise_profile__organization=user_org)
+    except User.DoesNotExist:
+        return Response({"error": "User not found or access denied"}, status=HTTP_404_NOT_FOUND)
 
     usage = filter_time_range(AppUsage.objects.filter(user=user), request)
     afk = filter_time_range(AFKEvent.objects.filter(user=user), request)
-
     productive = usage.filter(productivity_tag='productive').aggregate(Sum('duration'))['duration__sum'] or 0
     unproductive = usage.filter(productivity_tag='unproductive').aggregate(Sum('duration'))['duration__sum'] or 0
     neutral = usage.filter(productivity_tag='neutral').aggregate(Sum('duration'))['duration__sum'] or 0
     afk_time = afk.filter(is_afk=True).aggregate(Sum('duration'))['duration__sum'] or 0
-
     return Response({
         'user': user.username,
         'productive_minutes': round(productive / 60, 2),
@@ -81,46 +115,79 @@ def user_detail(request, user_id):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])  # optional if token-based
+@permission_classes([IsAuthenticated])
 def app_usage_summary(request):
-    usage = filter_time_range(AppUsage.objects.all(), request)
-
+    request_user = request.user
+    # Check if user is allowed
+    if not request_user.is_productivity_enable:
+        return Response({"error": "Not authorized to access this application"}, status=HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS)
+    # Get organization users
+    user_org = request_user.enterprise_profile.organization
+    org_users = User.objects.filter(enterprise_profile__organization=user_org)
+    # Filter AppUsage by users in the same organization
+    usage = filter_time_range(AppUsage.objects.filter(user__in=org_users), request)
+    # Aggregate results
     summarized = usage.values('app_name', 'productivity_tag').annotate(
         total_time=Sum('duration'),
         user_count=Count('user', distinct=True)
     ).order_by('-total_time')
-
     return Response(list(summarized))
 
 
+from dateutil.parser import parse
+
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])  # optional if token-based
+@permission_classes([IsAuthenticated])
 def sync_activity_data(request):
     user = User.objects.get(email=request.data['email'])
+    system = request.data.get('system', 'default')
 
-    # Process window events
+    # Process window (app usage) events
     for event in request.data.get('window_events', []):
         AppUsage.objects.update_or_create(
             user=user,
-            start_time=event['timestamp'],
+            system=system,
+            event_id=event['id'],
             defaults={
+                'start_time': event['timestamp'],
                 'duration': event['duration'],
                 'app_name': event['data']['app'],
                 'window_title': event['data'].get('title', ''),
-                'productivity_tag': tag_productivity(event['data']['app'])  # simple classifier
+                'productivity_tag': tag_productivity(event['data']['app']),
             }
         )
 
     # Process AFK events
     for event in request.data.get('afk_events', []):
+        event_id = event['id']
+        start_time = event['timestamp']
+        duration = event['duration']
+        is_afk = event['data']['status'] == 'afk'
+
+        if is_afk:
+            last_event = AFKEvent.objects.filter(user=user, system=system).order_by('-event_id').first()
+            if last_event and last_event.is_afk:
+                last_event.event_id = event_id
+                last_event.start_time = start_time
+                last_event.duration = 0  # You can customize this logic
+                last_event.save()
+                continue
+        else:
+            last_event = AFKEvent.objects.filter(user=user, system=system).order_by('-event_id').first()
+            if last_event and last_event.is_afk:
+                start_time_converted = parse(event['timestamp'])
+                last_event.duration = (start_time_converted - last_event.start_time).total_seconds()
+                last_event.save()
+
         AFKEvent.objects.update_or_create(
             user=user,
-            start_time=event['timestamp'],
+            system=system,
+            event_id=event_id,
             defaults={
-                'duration': event['duration'],
-                'is_afk': event['data']['status'] == 'afk'
+                'start_time': start_time,
+                'duration': duration,
+                'is_afk': is_afk,
             }
         )
 
     return Response({"status": "success"})
-
