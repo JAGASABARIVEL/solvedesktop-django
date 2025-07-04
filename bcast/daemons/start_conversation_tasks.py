@@ -113,7 +113,7 @@ class WhatsAppKafkaConsumer:
             "auto.offset.reset": "earliest",
             "enable.auto.commit": True
         }
-    
+
     def process_message(self, message):
         if message["msg_from_type"] == "CUSTOMER":
             self.handle_customer_messages(message)
@@ -139,7 +139,7 @@ class WhatsAppKafkaConsumer:
     def download_from_provider(self, media_id, access_token):
         file_data = None
         try:
-            auth_header=self.requests_auth_header(access_token) 
+            auth_header=self.requests_auth_header(access_token)
             media_info_response = requests.get(
                 f"https://graph.facebook.com/v18.0/{media_id}",
                 headers=auth_header
@@ -164,7 +164,7 @@ class WhatsAppKafkaConsumer:
 
     def provide_permission(self, cursor, org_id, file_id, user_id):
         cursor.execute(f"""
-            SELECT user_id FROM manage_users_enterpriseprofile 
+            SELECT user_id FROM manage_users_enterpriseprofile
             WHERE organization_id={self.param};
         """, (org_id,))
         employees = cursor.fetchall()
@@ -184,14 +184,14 @@ class WhatsAppKafkaConsumer:
                     can_write = EXCLUDED.can_write;
             """, (file_id, employee[0], True, True, True))
 
-    
 
-    def generate_presigned_url(self, s3_client, object_key, expiry_seconds=3600):
+
+    def generate_presigned_url(self, s3_client, object_key, expiry_seconds=86400):
         # Guess the MIME type from the object_key
         content_type, _ = mimetypes.guess_type(object_key)
         if content_type is None:
             content_type = 'application/octet-stream'  # Fallback for unknown types
-    
+
         url = s3_client.generate_presigned_url(
             ClientMethod='get_object',
             Params={
@@ -226,7 +226,7 @@ class WhatsAppKafkaConsumer:
         customer_directory = "customer"
         received_directory_name = "received"
         receiver_directory = receiver_name.replace(" ", "_")
-    
+
         # 2. Generate folder paths
 
         home_directory_key = f"{uname}/"
@@ -259,7 +259,7 @@ class WhatsAppKafkaConsumer:
 
         # 5. Insert user home folder if not exists
         cursor.execute(f"""
-            SELECT id FROM manage_files_file 
+            SELECT id FROM manage_files_file
             WHERE s3_key={self.param} AND owner_id={self.param} AND is_deleted={self.param}
             LIMIT 1;
         """, (home_directory_key, user_id, False))
@@ -277,7 +277,7 @@ class WhatsAppKafkaConsumer:
 
         # 4. Insert org folder if not exists
         cursor.execute(f"""
-            SELECT id FROM manage_files_file 
+            SELECT id FROM manage_files_file
             WHERE s3_key={self.param} AND owner_id={self.param} AND is_deleted={self.param}
             LIMIT 1;
         """, (org_directory_key, user_id, False))
@@ -295,7 +295,7 @@ class WhatsAppKafkaConsumer:
 
         # 6. Insert customer folder if not exists
         cursor.execute(f"""
-            SELECT id FROM manage_files_file 
+            SELECT id FROM manage_files_file
             WHERE s3_key={self.param} AND owner_id={self.param} AND is_deleted={self.param}
             LIMIT 1;
         """, (customer_directory_key, user_id, False))
@@ -310,10 +310,10 @@ class WhatsAppKafkaConsumer:
             """, (customer_directory, user_id, customer_directory_key, parent, False))
             parent =  cursor.fetchone()[0]
         self.provide_permission(cursor, org_id, parent, user_id)
-        
+
         # 7. Insert received folder if not exists
         cursor.execute(f"""
-            SELECT id FROM manage_files_file 
+            SELECT id FROM manage_files_file
             WHERE s3_key={self.param} AND owner_id={self.param} AND is_deleted={self.param}
             LIMIT 1;
         """, (received_directory_key, user_id, False))
@@ -331,7 +331,7 @@ class WhatsAppKafkaConsumer:
 
         # 8. Insert receiver folder if not exists
         cursor.execute(f"""
-            SELECT id FROM manage_files_file 
+            SELECT id FROM manage_files_file
             WHERE s3_key={self.param} AND owner_id={self.param} AND is_deleted={self.param}
             LIMIT 1;
         """, (receiver_folder_key, user_id, False))
@@ -349,7 +349,7 @@ class WhatsAppKafkaConsumer:
 
         # 9. Insert date folder under receiver folder if not exists
         cursor.execute(f"""
-            SELECT id FROM manage_files_file 
+            SELECT id FROM manage_files_file
             WHERE s3_key={self.param} AND owner_id={self.param} AND is_deleted={self.param}
             LIMIT 1;
         """, (date_folder_key, user_id, False))
@@ -366,7 +366,7 @@ class WhatsAppKafkaConsumer:
         self.provide_permission(cursor, org_id, parent, user_id)
 
         # 10. Insert file under date folder
-        signed_url = self.generate_presigned_url(s3, file_key)
+        signed_url = self.generate_presigned_url(s3, file_key, expiry_seconds=86400)
         utc = pytz.utc
         signed_url_expires_at = datetime.now(utc) + timedelta(seconds=86400)
         cursor.execute(f"""
@@ -385,7 +385,7 @@ class WhatsAppKafkaConsumer:
             ) VALUES ({self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP);
         """, (file_id, filename, user_id, size_gb))
 
-        
+
         return file_id, signed_url
 
     def handle_customer_message_whatsapp(self, msg_data):
@@ -407,7 +407,7 @@ class WhatsAppKafkaConsumer:
 
                 signed_url = None
                 if message_type != "text":
-                    message_body_copy = message_body_copy.get("caption")
+                    message_body_copy = message_body_copy.get("caption") or "No_Caption"
                     cursor.execute(f"SELECT user_id from manage_users_enterpriseprofile where user_id={self.param}", (owner_id,))
                     enterprise_profile = cursor.fetchone()
                     if not enterprise_profile:
@@ -420,9 +420,9 @@ class WhatsAppKafkaConsumer:
                         raise Exception("User not found in main user profile")
                     owner_email = owner_user_profile[0]
                     with self.download_from_provider(message_body.get("media_id"), login_credentials) as file_data:
-                        media_file_name = message_body.get("caption")
-                        if message_type in ("image/jpeg", "image/png"):
-                            media_file_name = message_body.get("caption") + "." + message_type.split('/')[-1]
+                        media_file_name = message_body.get("filename") if message_body.get("filename") else message_body_copy
+                        if message_type in ("image/jpeg", "image/png", "video/mp4", "video/3gpp", "audio/aac", "audio/mpeg", "audio/amr", "audio/ogg"):
+                            media_file_name = message_body_copy + "." + message_type.split('/')[-1]
                         file_id, signed_url = self.save_media_file_to_s3_raw_sql(conn, owner_email, recipient_id, media_file_name, file_data)
 
                 cursor.execute(f"SELECT id, owner_id FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
@@ -439,8 +439,8 @@ class WhatsAppKafkaConsumer:
                     contact_id, contact_name = contact_row
                 else:
                     cursor.execute(
-                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, '', {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id, name",
-                        (recipient_id, organization_id, org_owner_id, 'whatsapp', datetime.now(), datetime.now())
+                        f"INSERT INTO manage_contact_contact (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at) VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id, name",
+                        (recipient_id, recipient_id, organization_id, org_owner_id, 'whatsapp', datetime.now(), datetime.now())
                     )
                     contact_id, contact_name = cursor.fetchone()
 
@@ -465,7 +465,7 @@ class WhatsAppKafkaConsumer:
                     INSERT INTO manage_conversation_incomingmessage (conversation_id, contact_id, platform_id, organization_id, message_body, message_type, status_details, status, received_time, created_at)
                     VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, 'unread', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     RETURNING id, received_time, status, status_details
-                """, (conversation_id, contact_id, platform_id, organization_id, message_body if message_type=="text" else message_body.get("caption"), message_type, file_id))
+                """, (conversation_id, contact_id, platform_id, organization_id, message_body if message_type=="text" else message_body_copy, message_type, file_id))
                 msg_row = cursor.fetchone()
                 payload = {
                     'id': contact_id,
@@ -507,8 +507,8 @@ class WhatsAppKafkaConsumer:
                     else:
                         self.logger.info("No error_details found")
                         cursor.execute(f"""
-                            UPDATE manage_conversation_usermessage SET status={self.param} WHERE id={self.param}
-                        """, (message_status, user_message_id))
+                            UPDATE manage_conversation_usermessage SET status={self.param} WHERE conversation_id={self.param} AND status NOT IN ('failed', 'read')
+                        """, (message_status, conversation_id)) # Update all messages w.r.t conversation_id instead of specific user_message_id since all messages would have the same status by the action of customer like while opening and reading the message
 
                     cursor.execute(f"""
                         UPDATE manage_conversation_incomingmessage SET status='responded' WHERE conversation_id={self.param}
@@ -563,7 +563,7 @@ class WhatsAppKafkaConsumer:
                     self.logger.warning("Platform not found for phone_number_id: %s", page_owner_id)
                     return
                 platform_id, owner_id, login_credentials = platform_row
-                
+
                 cursor.execute(f"SELECT id, owner_id FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
                 org_row = cursor.fetchone()
                 if not org_row:
@@ -583,7 +583,7 @@ class WhatsAppKafkaConsumer:
                         profile = WhatsAppKafkaConsumer.get_messenger_user_profile(sender_id, login_credentials)
                         sender_name = profile.get("first_name")
                         profile_pic_url = profile.get("profile_pic")
-                
+
                         # Update contact with new image and expiry time
                         cursor.execute(
                             f"""UPDATE manage_contact_contact
@@ -656,7 +656,7 @@ class WhatsAppKafkaConsumer:
                     self.logger.warning("Platform not found for phone_number_id: %s", page_owner_id)
                     return
                 platform_id, owner_id, login_credentials = platform_row
-                
+
                 cursor.execute(f"SELECT id, owner_id FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
                 org_row = cursor.fetchone()
                 if not org_row:
@@ -670,28 +670,28 @@ class WhatsAppKafkaConsumer:
                 if contact_row:
                     contact_id, contact_name = contact_row
                     cursor.execute(f"""
-                        SELECT id FROM manage_conversation_conversation 
-                        WHERE platform_id={self.param} AND contact_id={self.param} 
+                        SELECT id FROM manage_conversation_conversation
+                        WHERE platform_id={self.param} AND contact_id={self.param}
                         AND status='active'
                     """, (platform_id, contact_id))
                     convo = cursor.fetchone()
-                
+
                     if convo:
                         conversation_id = convo[0]
                         # Step 2: Update user messages for this conversation with lower message IDs
                         cursor.execute(f"""
                             UPDATE manage_conversation_usermessage
-                            SET status={self.param} 
+                            SET status={self.param}
                             WHERE conversation_id={self.param} AND messageid~'^[0-9]+$' AND CAST(messageid AS BIGINT)<={self.param}
                         """, (message_status, conversation_id, timestamp))
-    
+
                         # Step 3: Mark the incoming message as responded
                         cursor.execute(f"""
                             UPDATE manage_conversation_incomingmessage SET status='responded' WHERE conversation_id={self.param}
                         """, (conversation_id,))
-    
+
                         self.logger.info("Messenger | Updated message status for conversation_id: %s", conversation_id)
-    
+
                         self.sio.emit("whatsapp_chat", {
                             "conversation_id": conversation_id,
                             "msg_from_type": "ORG",
@@ -705,7 +705,7 @@ class WhatsAppKafkaConsumer:
             self.logger.error("Error in handle_org_message_messenger: %s", e, exc_info=True)
 
 
-    
+
     def handle_website_chatwidget_messages(self, data):
         try:
             print("Received web chat message:", data)
@@ -748,7 +748,7 @@ class WhatsAppKafkaConsumer:
                         (user_uuid_for_session, user_uuid_for_session, organization_id, org_owner_id, 'webchat', datetime.now(), datetime.now())
                     )
                     contact_id, contact_name = cursor.fetchone()
-                
+
                 is_conversation_new = True
                 #3. Start new / get existing conversation
                 cursor.execute(f"""
@@ -766,7 +766,7 @@ class WhatsAppKafkaConsumer:
                         VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id
                     """, (contact_id, platform_id, organization_id, 'customer', 'new', datetime.now(), datetime.now()))
                     conversation_id = cursor.fetchone()[0]
-                
+
                 # 4. Insert incoming message
                 cursor.execute(f"""
                     INSERT INTO manage_conversation_incomingmessage (conversation_id, contact_id, platform_id, organization_id, message_body, message_type, status, received_time, created_at)
@@ -774,7 +774,7 @@ class WhatsAppKafkaConsumer:
                     RETURNING id, received_time, status
                 """, (conversation_id, contact_id, platform_id, organization_id, message_body, message_type))
                 msg_row = cursor.fetchone()
-                
+
                 payload_main_ui_client = {
                     'id': contact_id,
                     'conversation_id': conversation_id,
@@ -831,7 +831,7 @@ class WhatsAppKafkaConsumer:
         finally:
             self.logger.info("Stopping Kafka consumer...")
             consumer.close()
-    
+
     def devlmode(self):
         try:
             while True:

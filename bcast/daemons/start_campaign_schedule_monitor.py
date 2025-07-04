@@ -62,7 +62,7 @@ class CampaignScheduleMonitor:
     @property
     def param(self):
         return '?' if self.use_sqlite else '%s'
-    
+
     @staticmethod
     def calculate_next_run(frequency, current_time=None):
         current_time = current_time or datetime.datetime.now(datetime.timezone.utc)
@@ -97,7 +97,7 @@ class CampaignScheduleMonitor:
                 except (ValueError, KeyError):
                     continue
         return json.dumps(template)
-    
+
     def update_message_status(self, schedule_id, status, next_run=None):
         with self.get_conn() as conn:
             cursor = conn.cursor()
@@ -210,7 +210,7 @@ class CampaignScheduleMonitor:
                 print(
                     "Message Sent!!\n",
                     "Platform : ", platform_name, "\n",
-                    "Login Id : ", login_id, "\n", 
+                    "Login Id : ", login_id, "\n",
                     "From Key : ", login_credentials, "\n",
                     "Recipient : ", recipient_phone_number, "\n",
                     "Message : ", message_body, "\n"
@@ -278,9 +278,9 @@ class CampaignScheduleMonitor:
             cursor = conn.cursor()
             cursor.execute(
                 f"""
-                SELECT id,username,email FROM manage_users_customuser 
-                WHERE user_type='agent' AND id IN 
-                (SELECT user_id FROM manage_users_enterpriseprofile 
+                SELECT id,username,email FROM manage_users_customuser
+                WHERE user_type='agent' AND id IN
+                (SELECT user_id FROM manage_users_enterpriseprofile
                 WHERE organization_id={self.param})
                 """,
                 (organization.id,)
@@ -303,7 +303,8 @@ class CampaignScheduleMonitor:
                 conn,
                 platform_id=platform.id,
                 recipient_id=recipient.id,
-                message_body="TEMPLATE" if scheduled_message.template else formatted_message,
+                #message_body="TEMPLATE" if scheduled_message.template else formatted_message,
+                message_body="TEMPLATE" if scheduled_message.template and "parameter_format" not in scheduled_message.template else formatted_message[recipient.phone],
                 template=scheduled_message.template
             )
             self.logger.info("response %s %s %s", response, formatted_message, scheduled_message.template)
@@ -360,27 +361,27 @@ class CampaignScheduleMonitor:
                 # Lock eligible scheduled messages
                 now_utc = datetime.datetime.now(datetime.timezone.utc)
                 cursor.execute(f"""
-                    SELECT id, frequency, template, message_body, recipient_type, recipient_id, 
-                           platform_id, organization_id, datasource 
-                    FROM manage_campaign_scheduledmessage 
+                    SELECT id, frequency, template, message_body, recipient_type, recipient_id,
+                           platform_id, organization_id, datasource
+                    FROM manage_campaign_scheduledmessage
                     WHERE status IN ('scheduled', 'scheduled_warning') AND scheduled_time<={self.param}
                 """, (now_utc,))
                 messages = cursor.fetchall()
                 for msg in messages:
                     (
-                        schedule_id, frequency, template, message_body, recipient_type, 
+                        schedule_id, frequency, template, message_body, recipient_type,
                         recipient_id, platform_id, organization_id, datasource
                     ) = msg
                     cursor.execute(f"""
-                            SELECT id, owner_id 
-                            FROM manage_organization_organization 
+                            SELECT id, owner_id
+                            FROM manage_organization_organization
                             WHERE id={self.param}
                         """, (organization_id,))
                     organization = cursor.fetchone()
                     # Mark as in_progress immediately
                     cursor.execute(f"""
-                        UPDATE manage_campaign_scheduledmessage 
-                        SET status={self.param} 
+                        UPDATE manage_campaign_scheduledmessage
+                        SET status={self.param}
                         WHERE id={self.param}
                     """, ('in_progress',schedule_id,))
                     conn.commit()
@@ -406,8 +407,8 @@ class CampaignScheduleMonitor:
                     # Reschedule or complete/failed
                     if successful_deliveries == 0:
                         cursor.execute(f"""
-                            UPDATE manage_campaign_scheduledmessage 
-                            SET status={self.param} 
+                            UPDATE manage_campaign_scheduledmessage
+                            SET status={self.param}
                             WHERE id={self.param}
                         """, ('failed',schedule_id,))
                     elif successful_deliveries == len(recipients):
@@ -415,14 +416,14 @@ class CampaignScheduleMonitor:
                         if next_run:
                             #next_run = next_run.isoformat()
                             cursor.execute(f"""
-                                UPDATE manage_campaign_scheduledmessage 
-                                SET status={self.param},scheduled_time={self.param} 
+                                UPDATE manage_campaign_scheduledmessage
+                                SET status={self.param},scheduled_time={self.param}
                                 WHERE id={self.param}
                             """, ('scheduled',next_run,schedule_id))
                         else:
                             cursor.execute(f"""
-                                UPDATE manage_campaign_scheduledmessage 
-                                SET status={self.param} 
+                                UPDATE manage_campaign_scheduledmessage
+                                SET status={self.param}
                                 WHERE id={self.param}
                             """, ('completed',schedule_id,))
                     else:
@@ -430,14 +431,14 @@ class CampaignScheduleMonitor:
                         if next_run:
                             #next_run = next_run.isoformat()
                             cursor.execute(f"""
-                                UPDATE manage_campaign_scheduledmessage 
-                                SET status={self.param},scheduled_time={self.param} 
+                                UPDATE manage_campaign_scheduledmessage
+                                SET status={self.param},scheduled_time={self.param}
                                 WHERE id={self.param}
                             """, ('scheduled_warning',next_run,schedule_id))
                         else:
                             cursor.execute(f"""
-                                UPDATE manage_campaign_scheduledmessage 
-                                SET status={self.param} 
+                                UPDATE manage_campaign_scheduledmessage
+                                SET status={self.param}
                                 WHERE id={self.param}
                             """, ('warning',schedule_id,))
         except Exception as e:
