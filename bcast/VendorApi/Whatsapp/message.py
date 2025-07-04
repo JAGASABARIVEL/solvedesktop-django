@@ -98,14 +98,18 @@ class TemplateMessage(Message):
         header_component = next((c for c in template_obj.get("components", []) if c.get("type") == "HEADER"), None)
         if header_component and header_component.get("format") == "DOCUMENT" and file_obj:
             media_id = MediaMessage(self.phone_number_id, self.token).upload_media(file_obj, mime_type)
+
+            media_payload = {
+                "id": media_id,
+                "filename": file_obj.name
+            }
+
             payload["template"]["components"].append({
                 "type": "HEADER",
                 "parameters": [
                     {
                         "type": "document",
-                        "document": {
-                            "id": media_id
-                        }
+                        "document": media_payload
                     }
                 ]
             })
@@ -154,13 +158,17 @@ class MediaMessage(Message):
     def send_media_message(self, recipient, file_obj, media_type, mime_type, caption=None):
         """Send a media message (image/audio/video/document)"""
         media_id = self.upload_media(file_obj, mime_type)
+        media_payload = {
+            "id": media_id
+        }
+        # Add filename only for documents
+        if media_type == "document":
+            media_payload["filename"] = file_obj.name
         payload = {
             "messaging_product": "whatsapp",
             "to": recipient,
             "type": media_type,
-            media_type: {
-                "id": media_id
-            }
+            media_type: media_payload
         }
         if caption and media_type in ["image", "video", "document"]:
             payload[media_type]["caption"] = caption
