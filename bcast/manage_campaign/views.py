@@ -55,26 +55,21 @@ class ScheduledMessageListCreateAPIView(APIView):
 
     def post(self, request):
         try:
-            import time
-            start_time = time.time()
             datasource = json.loads(request.data.get('datasource', '{}'))
-            excel_filenames = dump_for_excel_datasource(datasource, request.FILES)
+            excel_filenames = dump_for_excel_datasource(datasource, request.FILES) if datasource else None
             mutable_data = request.data.copy()
+            if datasource:
+                mutable_data['excel_filename'] = ",".join(excel_filenames)
             mutable_data['datasource'] = json.dumps(datasource)
-            mutable_data['excel_filename'] = ",".join(excel_filenames)
             enterprise_profile = getattr(self.request.user, "enterprise_profile", None)
             organization = getattr(enterprise_profile, "organization", None)
             mutable_data['organization'] = organization.id
             mutable_data['user'] = self.request.user.id
-            parsing_time = time.time() - start_time
             serializer = ScheduledMessageSerializer(data=mutable_data)
-            serializer_time = time.time() - parsing_time
-            
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
