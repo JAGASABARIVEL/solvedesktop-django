@@ -47,6 +47,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     user_type = models.TextField(choices=USER_TYPE_CHOICES, default='individual')
     is_registration_complete = models.BooleanField(default=False)
     is_subscription_complete = models.BooleanField(default=False)
+    is_productivity_enable = models.BooleanField(default=False)
     is_payment_complete = models.BooleanField(default=False)
 
     # Permissions

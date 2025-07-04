@@ -192,6 +192,7 @@ class GoogleLoginView(APIView):
                         "is_registration_complete": user.is_registration_complete,
                         "is_subscription_complete": user.is_subscription_complete,
                         "is_payment_complete": user.is_payment_complete,
+                        "is_productivity_enable": user.is_productivity_enable,
                         "role": "owner" if organization.owner == user else "employee",
                         "organization" : {
                             "id": organization.id,
@@ -216,6 +217,7 @@ class GoogleLoginView(APIView):
                         "is_registration_complete": user.is_registration_complete,
                         "is_subscription_complete": user.is_subscription_complete,
                         "is_payment_complete": user.is_payment_complete,
+                        "is_productivity_enable": user.is_productivity_enable,
                         "role": "individual",
                         "organization" : {
                             "id": -1,
@@ -260,6 +262,7 @@ class EnterpriseOwnerRegistrationView(generics.CreateAPIView):
                         "is_registration_complete": user.is_registration_complete,
                         "is_subscription_complete": user.is_subscription_complete,
                         "is_payment_complete": user.is_payment_complete,
+                        "is_productivity_enable": user.is_productivity_enable,
                     },
                 },
                 status=status.HTTP_201_CREATED,
@@ -368,6 +371,7 @@ class IndividualRegistrationView(generics.CreateAPIView):
                         "is_registration_complete": user.is_registration_complete,
                         "is_subscription_complete": user.is_subscription_complete,
                         "is_payment_complete": user.is_payment_complete,
+                        "is_productivity_enable": user.is_productivity_enable,
                     },
                 },
                 status=status.HTTP_201_CREATED,
@@ -398,6 +402,7 @@ class LoginView(APIView):
                         "is_registration_complete": user.is_registration_complete,
                         "is_subscription_complete": user.is_subscription_complete,
                         "is_payment_complete": user.is_payment_complete,
+                        "is_productivity_enable": user.is_productivity_enable,
                         "role": "owner" if organization.owner == user else "employee",
                         "organization" : {
                             "id": organization.id,
@@ -417,6 +422,7 @@ class LoginView(APIView):
                         "is_registration_complete": user.is_registration_complete,
                         "is_subscription_complete": user.is_subscription_complete,
                         "is_payment_complete": user.is_payment_complete,
+                        "is_productivity_enable": user.is_productivity_enable,
                         "role": "individual",
                         "organization" : {
                             "id": -1,
