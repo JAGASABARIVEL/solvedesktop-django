@@ -8,8 +8,8 @@ from rest_framework.views import APIView
 
 import pyexcel
 
-from .models import Contact, ContactGroup, GroupMember
-from .serializers import ContactSerializer, ContactGroupSerializer, GroupMemberSerializer
+from .models import Contact, ContactCustomField, ContactCustomFieldValue, ContactGroup, GroupMember
+from .serializers import ContactSerializer, ContactCustomFieldSerializer, ContactGroupSerializer, GroupMemberSerializer
 from manage_users.permissions import EnterpriserUsers
 
 
@@ -18,6 +18,27 @@ class OrganizationQuerysetMixin:
     def get_queryset(self):
         user_org = self.request.user.enterprise_profile.organization
         return super().get_queryset().filter(organization=user_org)
+
+
+class ContactCustomFieldListCreateView(OrganizationQuerysetMixin, generics.ListCreateAPIView):
+    serializer_class = ContactCustomFieldSerializer
+    permission_classes = [EnterpriserUsers]
+    queryset = ContactCustomField.objects.all()
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.enterprise_profile.organization)
+
+
+# views.py
+class ContactCustomFieldRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [EnterpriserUsers]
+    serializer_class = ContactCustomFieldSerializer
+    queryset = ContactCustomField.objects.all()
+
+    def perform_destroy(self, instance):
+        # delete related values before deleting field
+        ContactCustomFieldValue.objects.filter(custom_field=instance).delete()
+        instance.delete()
 
 
 # Contact Views
@@ -107,6 +128,95 @@ class ContactImportView(APIView):
             traceback.print_exc()
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class ContactImportView(APIView):
+    parser_classes = [MultiPartParser]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        organization = getattr(user.enterprise_profile, 'organization', None)
+
+        if not organization:
+            return Response({'error': 'Organization is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'file' not in request.FILES:
+            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+
+        file = request.FILES['file']
+
+        try:
+            # Read Excel sheet
+            sheet = pyexcel.get_sheet(file_type='xlsx', file_content=file.read())
+
+            # Header row
+            sheet_columns = sheet.row_at(0)
+            required_columns = ['name', 'description', 'phone', 'address', 'category']
+
+            if not all(col in sheet_columns for col in required_columns):
+                return Response(
+                    {'error': f'Invalid format. Required columns: {", ".join(required_columns)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            imported_count = 0
+            updated_count = 0
+            errors = []
+
+            with transaction.atomic():
+                for row in sheet.rows():
+                    if row == sheet_columns:  # Skip header
+                        continue
+
+                    contact_data = dict(zip(sheet_columns, row))
+
+                    # Separate standard and custom fields
+                    base_data = {k: v for k, v in contact_data.items() if k in required_columns}
+                    custom_fields = {k: v for k, v in contact_data.items() if k not in required_columns}
+
+                    phone = contact_data.get('phone')
+                    if not phone:
+                        errors.append({'row': contact_data, 'errors': 'Missing phone'})
+                        continue
+
+                    contact_qs = Contact.objects.filter(phone=phone, organization=organization)
+
+                    if contact_qs.exists():
+                        # PATCH: Update existing contact
+                        contact = contact_qs.first()
+                        serializer = ContactSerializer(
+                            contact,
+                            data=base_data,
+                            partial=True,
+                            context={'request': request, 'custom_fields': custom_fields}
+                        )
+                        if serializer.is_valid():
+                            serializer.save()
+                            updated_count += 1
+                        else:
+                            errors.append({'phone': phone, 'errors': serializer.errors})
+                    else:
+                        # CREATE new contact
+                        serializer = ContactSerializer(
+                            data=base_data,
+                            context={'request': request, 'custom_fields': custom_fields}
+                        )
+                        if serializer.is_valid():
+                            serializer.save(organization=organization, created_by=user)
+                            imported_count += 1
+                        else:
+                            errors.append({'phone': phone, 'errors': serializer.errors})
+
+            return Response({
+                'message': 'Contacts processed successfully',
+                'imported_count': imported_count,
+                'updated_count': updated_count,
+                'errors': errors
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # Contact Group Views

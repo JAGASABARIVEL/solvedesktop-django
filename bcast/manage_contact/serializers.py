@@ -1,23 +1,103 @@
 from rest_framework import serializers
 from django.db import transaction
-from .models import Contact, ContactGroup, GroupMember
+from .models import Contact, ContactCustomField, ContactCustomFieldValue, ContactGroup, GroupMember
+
+
+# serializers.py
+class ContactCustomFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactCustomField
+        fields = ['id', 'name', 'key', 'field_type', 'required', 'organization']
+        read_only_fields = ['organization']
+
+    def validate(self, data):
+        request = self.context.get('request')
+        if request and request.method in ['POST', 'PUT']:
+            data['organization'] = request.user.enterprise_profile.organization
+        return data
+
+
+class ContactCustomFieldValueSerializer(serializers.ModelSerializer):
+    key = serializers.CharField(source='custom_field.key')
+    field_type = serializers.CharField(source='custom_field.field_type')
+    class Meta:
+        model = ContactCustomFieldValue
+        fields = ['key', 'field_type', 'value']
+
+
+#class ContactSerializer(serializers.ModelSerializer):
+#    custom_fields = ContactCustomFieldValueSerializer(many=True, read_only=True, source='custom_field_values')
+#    class Meta:
+#        model = Contact
+#        fields = ['id', 'name', 'description', 'phone', 'platform_name', 'image', 'address', 'category', 'organization', 'created_by', 'custom_fields']
+#        extra_kwargs = {
+#            'organization': {'read_only': True},
+#            'created_by': {'read_only': True},
+#        }
+#    def validate(self, data):
+#        # Ensure the contact belongs to the user's organization
+#        request = self.context['request']
+#        if request.method == 'POST':
+#            data['organization'] = request.user.enterprise_profile.organization
+#            data['created_by'] = request.user
+#        return data
 
 
 class ContactSerializer(serializers.ModelSerializer):
+    custom_fields = serializers.SerializerMethodField()
+
     class Meta:
         model = Contact
-        fields = ['id', 'name', 'description', 'phone', 'platform_name', 'image', 'address', 'category', 'organization', 'created_by']
+        fields = [
+            'id', 'name', 'description', 'phone', 'platform_name', 'image',
+            'address', 'category', 'organization', 'created_by',
+            'custom_fields'
+        ]
         extra_kwargs = {
             'organization': {'read_only': True},
             'created_by': {'read_only': True},
         }
+
+    def get_custom_fields(self, obj):
+        values = ContactCustomFieldValue.objects.filter(contact=obj)
+        return {v.custom_field.key: v.value for v in values}
+
     def validate(self, data):
-        # Ensure the contact belongs to the user's organization
         request = self.context['request']
         if request.method == 'POST':
             data['organization'] = request.user.enterprise_profile.organization
             data['created_by'] = request.user
         return data
+
+    def create(self, validated_data):
+        request_data = self.context['request'].data
+        custom_fields = self.context.get("custom_fields", {}) or request_data.get('custom_fields', {})
+        contact = super().create(validated_data)
+        self._save_custom_fields(contact, custom_fields)
+        return contact
+
+    def update(self, instance, validated_data):
+        request_data = self.context['request'].data
+        custom_fields = self.context.get("custom_fields", {}) or request_data.get('custom_fields', {})
+        contact = super().update(instance, validated_data)
+        self._save_custom_fields(contact, custom_fields)
+        return contact
+
+    def _save_custom_fields(self, contact, custom_fields):
+        org_fields = ContactCustomField.objects.filter(organization=contact.organization)
+        field_map = {f.key: f for f in org_fields}
+
+        for key, value in custom_fields.items():
+            if key in field_map:
+                field = field_map[key]
+                ContactCustomFieldValue.objects.update_or_create(
+                    contact=contact,
+                    custom_field=field,
+                    defaults={'value': str(value)}
+                )
+
+
+
 
 
 class GroupMemberSerializer(serializers.ModelSerializer):

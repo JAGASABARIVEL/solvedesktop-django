@@ -34,6 +34,44 @@ class Contact(models.Model):
         ]
 
 
+class ContactCustomField(models.Model):
+    FIELD_TYPES = [
+        ('text', 'Text'),
+        ('number', 'Number'),
+        ('dropdown', 'Dropdown'),
+        ('checkbox', 'Checkbox'),
+        ('date', 'Date'),
+    ]
+
+    organization = models.ForeignKey(
+        settings.ORG_MODEL, on_delete=models.CASCADE, related_name='contact_custom_fields'
+    )
+    name = models.CharField(max_length=255)  # e.g., "GST Number"
+    key = models.SlugField(max_length=100)   # used in frontend and storage
+    field_type = models.CharField(max_length=20, choices=FIELD_TYPES)
+    options = models.JSONField(blank=True, null=True)  # only for dropdowns/checkboxes
+    required = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    def delete(self, *args, **kwargs):
+        # Delete all values for this custom field
+        ContactCustomFieldValue.objects.filter(custom_field=self).delete()
+        super().delete(*args, **kwargs)
+    class Meta:
+        unique_together = ('organization', 'key')
+    def __str__(self):
+        return f"{self.name} ({self.organization})"
+
+
+class ContactCustomFieldValue(models.Model):
+    contact = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name='custom_field_values')
+    custom_field = models.ForeignKey(ContactCustomField, on_delete=models.CASCADE)
+    value = models.TextField(blank=True, null=True)  # always stored as string
+    class Meta:
+        unique_together = ('contact', 'custom_field')
+    def __str__(self):
+        return f"{self.custom_field.key}: {self.value}"
+
+
 class ContactGroup(models.Model):
     name = models.TextField()
     description = models.TextField(blank=True, null=True)
