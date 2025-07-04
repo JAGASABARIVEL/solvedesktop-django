@@ -727,9 +727,13 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 status_details=file_instance.id if file_instance else None,
                 template=format_template_messages(template, message_body)
             )
+            conversations = Conversation.objects.filter(
+                id=conversation.id
+            )
+            serializer = ConversationSerializer(conversations, many=True)
             if warning_message:
-                return Response({'id': conversation.id, "warn": warning_message}, status=status.HTTP_200_OK)
-            return Response({'id': conversation.id}, status=status.HTTP_200_OK)
+                return Response({'data': serializer.data, "warn": warning_message}, status=status.HTTP_200_OK)
+            return Response({'data': serializer.data}, status=status.HTTP_200_OK)
 
 
 class DateRangeHelper:

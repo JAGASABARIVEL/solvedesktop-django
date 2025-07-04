@@ -13,7 +13,7 @@ class IncomingMessageSerializer(serializers.ModelSerializer):
     
     def get_media_url(self, obj):
         if obj.message_type not in ['text', 'template']:
-            file_id = int(obj.status_details or -1)
+            file_id = int(obj.status_details) if (obj.status_details.isdigit()) else -1
             if file_id:
                 try:
                     file = File.objects.get(id=file_id)
@@ -35,7 +35,7 @@ class UserMessageSerializer(serializers.ModelSerializer):
     
     def get_media_url(self, obj):
         if obj.message_type not in ['text'] and obj.status_details not in [None] and obj.status != 'failed':
-            file_id = int(obj.status_details or -1)
+            file_id = int(obj.status_details) if (obj.status_details.isdigit()) else -1
             if file_id:
                 try:
                     file = File.objects.get(id=file_id)
@@ -46,13 +46,22 @@ class UserMessageSerializer(serializers.ModelSerializer):
                     return None
         return None
 
+from manage_contact.models import Contact, ContactCustomFieldValue
+class ContactCustomFieldValueSerializer(serializers.ModelSerializer):
+    key = serializers.CharField(source='custom_field.key')
+    field_type = serializers.CharField(source='custom_field.field_type')
 
-class ContactSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    name = serializers.CharField()
-    phone = serializers.CharField()
-    image = serializers.CharField()
-    platform_name = serializers.CharField()
+    class Meta:
+        model = ContactCustomFieldValue
+        fields = ['key', 'field_type', 'value']
+
+
+class ContactWithCustomFieldsSerializer(serializers.ModelSerializer):
+    custom_fields = ContactCustomFieldValueSerializer(many=True, read_only=True, source='custom_field_values')
+
+    class Meta:
+        model = Contact
+        fields = ['id', 'name', 'phone', 'platform_name', 'image', 'address', 'category', 'description', 'custom_fields']
 
 
 class AssignedUserSerializer(serializers.Serializer):
@@ -62,7 +71,7 @@ class AssignedUserSerializer(serializers.Serializer):
 
 class ConversationSerializer(serializers.ModelSerializer):
     messages = serializers.SerializerMethodField()
-    contact = ContactSerializer()
+    contact = ContactWithCustomFieldsSerializer()  # updated!
     assigned = serializers.SerializerMethodField()
 
     class Meta:
