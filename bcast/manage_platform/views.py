@@ -18,17 +18,20 @@ class PlatformListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         user = self.request.user
         # Fetch platforms for organizations the user belongs to
-        return Platform.objects.filter(organization__enterprise_profiles__user=user)
+        queryset = Platform.objects.filter(organization__enterprise_profiles__user=user)
+        # Optional query parameter: platform_type
+        platform_type = self.request.query_params.get('platform_type')
+        if platform_type:
+            queryset = queryset.filter(platform_name=platform_type)
+        return queryset
 
     def perform_create(self, serializer):
         user = self.request.user
         enterprise_profile = getattr(user, "enterprise_profile", None)
         organization = getattr(enterprise_profile, "organization", None)
-
         # Check if user is the owner or privileged in this specific organization
         if not (organization.owner == user or organization.enterprise_profiles.filter(user=user).exists()):
             raise permissions.PermissionDenied("You do not have permission to add platforms.")
-
         serializer.save(owner=user)
 
 class PlatformRetrieveUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
