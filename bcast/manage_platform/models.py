@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 # Create your models here.
 class Platform(models.Model):
@@ -16,8 +17,30 @@ class Platform(models.Model):
     status = models.TextField(default='active')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=['organization', 'user_platform_name'], name='unique_user_platform_per_org')
         ]
+
+
+class GmailAccount(models.Model):
+    platform = models.OneToOneField(settings.PLATFORM_MODEL, on_delete=models.CASCADE, related_name='gmail_account')
+    email_address = models.EmailField(unique=True)
+    access_token = models.TextField()
+    refresh_token = models.TextField()
+    token_expiry = models.DateTimeField()
+    watch_expiry = models.DateTimeField(null=True, blank=True)
+    history_id = models.CharField(max_length=255, null=True, blank=True)
+    last_watch_time = models.DateTimeField(null=True, blank=True)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    @property
+    def is_token_expired(self):
+        return timezone.now() >= self.token_expiry
+
+
+class ProcessedGmailMessage(models.Model):
+    gmail_account = models.ForeignKey(GmailAccount, on_delete=models.CASCADE, related_name='processed_messages')
+    message_id = models.CharField(max_length=255, unique=True)
+    processed_at = models.DateTimeField(auto_now_add=True)

@@ -158,6 +158,18 @@ def verify_signature(request, phone_number_id):
     return hmac.compare_digest(expected_signature, signature)
 
 
+def extract_plain_text(payload):
+    parts = payload.get("parts", [])
+    for part in parts:
+        if part.get("mimeType") == "text/plain":
+            data = part.get("body", {}).get("data")
+            if data:
+                return base64.urlsafe_b64decode(data).decode("utf-8")
+        elif part.get("parts"):
+            return extract_plain_text(part)
+    return "[No Text]"
+
+
 @app.route('/whatsapp', methods=['GET', 'POST'])
 def whatsapp_webhook():
     """
@@ -395,48 +407,105 @@ def messenger_webhook():
 
 #from yourapp.models import get_gmail_account_by_email
 #from yourapp.utils import poll_history
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from django.utils.timezone import make_aware
+from datetime import datetime
 import base64
+import json
+from google.auth.transport.requests import Request
+
+
 @app.route("/webhook/gmail/push", methods=["POST"])
 def gmail_push_webhook():
-    logger.info(f"Received notification from pub/sub google {request.data}")
-
+    logger.info(f"📥 Gmail Webhook Payload: {request.data}")
     try:
-        # Step 1: Parse the outer message JSON
         envelope = json.loads(request.data)
-
-        # Step 2: Decode base64 "data" field inside "message"
         pubsub_message = envelope.get("message", {})
         encoded_data = pubsub_message.get("data")
-
         if not encoded_data:
-            logger.warning("Missing data in Pub/Sub message.")
             return jsonify({"error": "Missing data"}), 400
-
-        # Step 3: Decode Base64 and parse JSON
         decoded_bytes = base64.b64decode(encoded_data)
         decoded_json = json.loads(decoded_bytes)
-
-        # Step 4: Extract email and historyId
         email_address = decoded_json.get("emailAddress")
         history_id = decoded_json.get("historyId")
-
-        if not email_address:
-            logger.warning("Email address not found in decoded data.")
-            return jsonify({"error": "Missing email"}), 400
-
-        logger.info(f"Received Gmail notification for {email_address}, historyId: {history_id}")
-
-        # TODO: Look up your account model by email and call poll_history(account, history_id)
-        #account = get_gmail_account_by_email(email_address)
-        #if not account:
-        #    return jsonify({"error": "Account not found"}), 404
-        #poll_history(account)
-        logger.info(f"Received email notification {email_address}")
-        return jsonify({"status": "Processed"}), 200
-    except Exception as webhook_error:
-        logger.info(f"Error while processing the webhook notification {webhook_error}")
-        return jsonify({"error": "Issue while processing webhook notification"}), 400
-
+        if not email_address or not history_id:
+            logger.warning("Missing email or historyId")
+            return jsonify({"error": "Missing fields"}), 400
+        logger.info(f"📬 Gmail push for {email_address}, historyId={history_id}")
+        # Fetch GmailAccount info
+        with get_conn() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT id, access_token, refresh_token FROM manage_platform_gmailaccount
+                    WHERE email_address = %s AND active = TRUE
+                    LIMIT 1
+                """, (email_address,))
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({"error": "Gmail account not found"}), 404
+                account_id, access_token, refresh_token = row
+        # Setup credentials
+        creds = Credentials(
+            token=access_token,
+            refresh_token=refresh_token,
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=config("GOOGLE_CLIENT_ID"),
+            client_secret=config("GOOGLE_CLIENT_SECRET")
+        )
+        if creds.expired:
+            creds.refresh(Request())
+            access_token = creds.token  # update in DB later if needed
+        service = build('gmail', 'v1', credentials=creds)
+        history = service.users().history().list(
+            userId='me',
+            startHistoryId=history_id,
+            historyTypes=['messageAdded']
+        ).execute()
+        logger.info(f"🔍 Gmail History keys: {history.keys()}")
+        for record in history.get("history", []):
+            for msg_meta in record.get("messages", []):
+                msg_id = msg_meta["id"]
+                # Check duplicate
+                with get_conn() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            SELECT 1 FROM manage_platform_processedgmailmessage
+                            WHERE gmail_account_id = %s AND message_id = %s
+                            LIMIT 1
+                        """, (account_id, msg_id))
+                        if cursor.fetchone():
+                            logger.info(f"⏩ Already processed message {msg_id}")
+                            continue
+                # Fetch full message
+                message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+                headers = {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
+                sender = headers.get("From")
+                timestamp = int(message.get("internalDate", 0)) // 1000
+                received_time = make_aware(datetime.utcfromtimestamp(timestamp))
+                # Extract plain text from payload
+                text_message = extract_plain_text(message.get("payload", {}))
+                logger.info(f"📨 Email from {sender}: {text_message[:50]}...")
+                # Push to Kafka
+                send_msg_from_customer(
+                    phone_number_id=email_address,
+                    recipient_id=sender,
+                    message_body=text_message,
+                    msg_type="text",
+                    msg_from_type="CUSTOMER",
+                    app_name="GMAIL"
+                )
+                # Save message ID to prevent duplicates
+                with get_conn() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            INSERT INTO manage_platform_processedgmailmessage (gmail_account_id, message_id, created_at)
+                            VALUES (%s, %s, NOW())
+                        """, (account_id, msg_id))
+        return jsonify({"status": "Published to Kafka"}), 200
+    except Exception as e:
+        logger.exception(f"💥 Gmail webhook error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 start_background_tasks()

@@ -6,12 +6,15 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from django.utils.timezone import make_aware
+from django.utils import timezone
+from google.auth.transport.requests import Request
 from dotenv import load_dotenv
 from decouple import config
 
 from django.conf import settings
 
 load_dotenv()
+
 
 def get_gmail_service(account):
     creds = Credentials(
@@ -21,9 +24,18 @@ def get_gmail_service(account):
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET
     )
-    if creds.expired:
-        creds.refresh()
-    return build('gmail', 'v1', credentials=creds), creds
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        account.access_token = creds.token
+        # Google sets token expiry duration on creds.expiry
+        if creds.expiry:
+            account.token_expiry = creds.expiry
+        else:
+            account.token_expiry = timezone.now() + timedelta(seconds=3600)
+        account.save(update_fields=["access_token", "token_expiry"])
+    service = build('gmail', 'v1', credentials=creds)
+    return service, creds
+
 
 def watch_gmail(account):
     service, creds = get_gmail_service(account)
@@ -32,12 +44,16 @@ def watch_gmail(account):
         "labelIds": ["UNREAD", "IMPORTANT", "CATEGORY_PERSONAL", "INBOX"]
     }
     result = service.users().watch(userId='me', body=body).execute()
-    print("result ", result)
+    print("Gmail watch response:", result)
+    # Extract expiration from watch response
+    expiration_ts = int(result.get("expiration", 0))  # in milliseconds
+    expiration_dt = make_aware(datetime.utcfromtimestamp(expiration_ts / 1000)) if expiration_ts else None
+    # Update GmailAccount
     account.history_id = result['historyId']
     account.last_watch_time = make_aware(datetime.utcnow())
+    account.watch_expiry = expiration_dt
     account.access_token = creds.token
-    #account.token_expiry = make_aware(creds.expiry)
-    account.save()
+    account.save(update_fields=["history_id", "last_watch_time", "watch_expiry", "access_token"])
     return result
 
 
