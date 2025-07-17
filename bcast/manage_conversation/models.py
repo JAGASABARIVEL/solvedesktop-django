@@ -23,6 +23,8 @@ class Conversation(models.Model):
         ('closed', 'Closed')
     ]
     status = models.TextField(choices=STATUS_CHOICES, default='new')
+    subject = models.TextField(null=True, blank=True)
+    thread_id = models.TextField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -39,6 +41,8 @@ class IncomingMessage(models.Model):
 
     message_type = models.TextField(default="TEXT")
     message_body = models.TextField()
+    content_blocks = models.JSONField(null=True, blank=True)
+    messageid = models.TextField(null=True, blank=True)
     received_time = models.DateTimeField(auto_now_add=True)
 
     STATUS_CHOICES = [
@@ -57,6 +61,7 @@ class IncomingMessage(models.Model):
             'conversation_id': self.conversation_id,
             'received_time': self.received_time.isoformat() if self.received_time else None,
             'message_body': self.message_body,
+            'image_urls': self.image_urls,
             'status': self.status,
             'status_details': self.status_details,
             'type': 'customer'
@@ -77,3 +82,4 @@ class UserMessage(models.Model):
     status_details = models.TextField(blank=True, null=True)
     messageid = models.TextField(blank=True, null=True)
     template = models.TextField(blank=True, null=True)
+

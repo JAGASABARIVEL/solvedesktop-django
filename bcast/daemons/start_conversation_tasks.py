@@ -7,8 +7,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from io import BytesIO
 import sqlite3
+import base64
 import mimetypes
 import pytz
+import re
+from email.utils import parseaddr
 
 import jwt
 import psycopg2
@@ -36,7 +39,7 @@ os.environ["B2_ACCESS_KEY_ID"] = config("B2_ACCESS_KEY_ID")
 os.environ["B2_SECRET_ACCESS_KEY"] = config("B2_SECRET_ACCESS_KEY")
 os.environ["B2_STORAGE_BUCKET_NAME"] = config("B2_STORAGE_BUCKET_NAME")
 if os.getenv("PRODUCTION") == '1':
-    os.environ["SOCKET_URL"] = "https://solvedesktop.onrender.com?token={access_token}"
+    os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
 else:
     os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
 
@@ -125,6 +128,8 @@ class WhatsAppKafkaConsumer:
             self.handle_customer_message_whatsapp(message)
         elif  message["app_name"] == "MESSENGER":
             self.handle_customer_message_messenger(message)
+        elif message["app_name"] == "GMAIL":
+            self.handle_customer_message_gmail(message)  # ✅ Add this
 
     def handle_org_messages(self, message):
         if message["app_name"] == "WHATSAPP":
@@ -384,8 +389,6 @@ class WhatsAppKafkaConsumer:
                 file_id_id, file_name, user_id, size_gb, start_time
             ) VALUES ({self.param}, {self.param}, {self.param}, {self.param}, CURRENT_TIMESTAMP);
         """, (file_id, filename, user_id, size_gb))
-
-
         return file_id, signed_url
 
     def handle_customer_message_whatsapp(self, msg_data):
@@ -395,7 +398,6 @@ class WhatsAppKafkaConsumer:
             message_body = message_body_copy = msg_data['message_body']
             phone_number_id = msg_data['phone_number_id']
             file_id = None
-
             with self.get_conn() as conn:
                 cursor = conn.cursor()
                 cursor.execute(f"SELECT id, owner_id, login_credentials FROM manage_platform_platform WHERE login_id={self.param}", (phone_number_id,))
@@ -404,6 +406,16 @@ class WhatsAppKafkaConsumer:
                     self.logger.warning("Platform not found for phone_number_id: %s", phone_number_id)
                     return
                 platform_id, owner_id, login_credentials = platform_row
+                # Blocked contact check BEFORE creating/fetching contact
+                cursor.execute(f"""
+                    SELECT 1 FROM manage_platform_blockedcontact
+                    WHERE platform_id={self.param} AND contact_value={self.param}
+                    LIMIT 1
+                """, (platform_id, recipient_id))
+                is_blocked = cursor.fetchone()
+                if is_blocked:
+                    self.logger.warning("🚫 Blocked contact %s on platform_id %s — skipping message.", recipient_id, platform_id)
+                    return
 
                 signed_url = None
                 if message_type != "text":
@@ -682,7 +694,7 @@ class WhatsAppKafkaConsumer:
                         cursor.execute(f"""
                             UPDATE manage_conversation_usermessage
                             SET status={self.param}
-                            WHERE conversation_id={self.param} AND messageid~'^[0-9]+$' AND CAST(messageid AS BIGINT)<={self.param}
+                            WHERE conversation_id={self.param} AND messageid~'^[0-9]+$' AND CAST(messageid AS BIGINT)<={self.param} AND status NOT IN ('failed', 'read')
                         """, (message_status, conversation_id, timestamp))
 
                         # Step 3: Mark the incoming message as responded
@@ -800,6 +812,170 @@ class WhatsAppKafkaConsumer:
                 self.sio.emit("website_chatwidget_messages_back_to_front", payload_chat_widget_client)
         except Exception as e:
             self.logger.error("Error in handle_website_chatwidget_messages: %s", e, exc_info=True)
+    
+    def normalize_subject(self, subject: str) -> str:
+        # Remove Re:, Re[2]:, Fwd:, FW: etc.
+        return re.sub(r'^(?:(re(\[\d+\])?|fw(d)?):\s*)+', '', subject, flags=re.IGNORECASE).strip()
+
+    def handle_customer_message_gmail(self, message):
+        try:
+            email_address = message["phone_number_id"]
+            sender_email = message["recipient_id"]
+            sender_name, sender_email_addr = parseaddr(sender_email)
+            if not sender_email or sender_email_addr == email_address:
+                return
+            message_id =  message["message_id"]
+            thread_id = message["thread_id"]
+            message_body = message["message_body"]
+            message_type = message["msg_type"]
+            raw_subject = message.get("subject", "No Subject")
+            content_blocks = message.get("content_blocks", [])
+            attachments = message.get("attachments", [])
+            normalized_subject = self.normalize_subject(raw_subject)
+            self.logger.warning("📭 normalized_subject: %s", normalized_subject)
+            received_time = datetime.now()
+            file_ids = []
+            signed_urls = []
+            file_type_map = {}  # New: map of file_id -> mime_type
+            medial_urls_for_client = []
+            with self.get_conn() as conn:
+                cursor = conn.cursor()
+                # 1. Fetch Gmail platform
+                cursor.execute("""
+                    SELECT id, owner_id FROM manage_platform_platform
+                    WHERE login_id = %s
+                """, (email_address,))
+                platform_row = cursor.fetchone()
+                if not platform_row:
+                    self.logger.warning("📭 Gmail platform not found for: %s", email_address)
+                    return
+                platform_id, owner_id = platform_row
+                # 2. Fetch organization
+                cursor.execute("""
+                    SELECT id FROM manage_organization_organization
+                    WHERE owner_id = %s
+                """, (owner_id,))
+                org_row = cursor.fetchone()
+                if not org_row:
+                    self.logger.warning("🏢 Organization not found for owner_id: %s", owner_id)
+                    return
+                # 3. Blocked contact check BEFORE creating/fetching contact
+                cursor.execute(f"""
+                    SELECT 1 FROM manage_platform_blockedcontact
+                    WHERE platform_id={self.param} AND contact_value={self.param}
+                    LIMIT 1
+                """, (platform_id, sender_email_addr))
+                is_blocked = cursor.fetchone()
+                if is_blocked:
+                    self.logger.warning("🚫 Blocked contact %s on platform_id %s — skipping message.", sender_email_addr, platform_id)
+                    return
+                organization_id = org_row[0]
+                # 4. Fetch or create contact
+                cursor.execute(f"""
+                    SELECT id, name FROM manage_contact_contact
+                    WHERE phone={self.param} AND organization_id={self.param}
+                """, (sender_email_addr, organization_id))
+                contact = cursor.fetchone()
+                if contact:
+                    contact_id, _ = contact
+                else:
+                    cursor.execute(f"""
+                        INSERT INTO manage_contact_contact
+                        (phone, name, organization_id, created_by_id, platform_name, created_at, updated_at)
+                        VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, NOW(), NOW())
+                        RETURNING id
+                    """, (sender_email_addr, sender_email_addr, organization_id, owner_id, 'gmail'))
+                    contact_id = cursor.fetchone()[0]
+                if attachments:
+                    cursor.execute(f"SELECT email FROM manage_users_customuser WHERE id={self.param}", (owner_id,))
+                    owner_email_row = cursor.fetchone()
+                    if not owner_email_row:
+                        raise Exception("Owner email not found")
+                    owner_email = owner_email_row[0]
+                    for attachment in attachments:
+                        try:
+                            filename = attachment.get("filename")
+                            mime_type = attachment.get("mime_type", "application/octet-stream")
+                            base64_data = attachment.get("data_base64")
+                            if not base64_data or not filename:
+                                continue
+                            file_data = BytesIO(base64.b64decode(base64_data))
+                            file_id, signed_url = self.save_media_file_to_s3_raw_sql(
+                                conn=conn,
+                                user_identifier=owner_email,
+                                receiver_name=sender_email_addr,
+                                filename=filename,
+                                file_data=file_data
+                            )
+                            file_ids.append(file_id)
+                            signed_urls.append(signed_url)
+                            file_type_map[file_id] = mime_type  # ✅ Track the MIME type per file
+                            medial_urls_for_client.append({
+                                "url": signed_url,
+                                "type": mime_type or "application/octet-stream",
+                                "filename": filename}
+                            )
+                        except Exception as ex:
+                            self.logger.error(f"Error saving attachment: {ex}", exc_info=True)
+                # 5. Fetch or create conversation by message_id
+                # AND LOWER(TRIM(REGEXP_REPLACE(subject, '^(re(\\[\\d+\\])?:|fw(d)?):\\s*', '', 'gi'))) = LOWER(%s)
+                cursor.execute("""
+                    SELECT id FROM manage_conversation_conversation
+                    WHERE contact_id = %s AND platform_id = %s AND organization_id = %s AND thread_id = %s
+                    AND status IN ('new', 'active')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (contact_id, platform_id, organization_id, thread_id,))
+                convo = cursor.fetchone()
+                if convo:
+                    conversation_id = convo[0]
+                    is_conversation_new = False
+                    # ✅ Optionally update subject if it changed (while keeping same thread)
+                    cursor.execute(f"""
+                        UPDATE manage_conversation_conversation SET subject={self.param}, updated_at=NOW() WHERE id={self.param} AND subject !={self.param}""", (normalized_subject, conversation_id, normalized_subject))
+                    cursor.execute(f"""
+                        UPDATE manage_conversation_usermessage SET status={self.param} WHERE conversation_id={self.param} AND status NOT IN ('failed', 'read')""", ('read', conversation_id)) # Update all messages w.r.t conversation_id instead of specific user_message_id since all messages would have the same status by the action of customer like while opening and reading the message
+                else:
+                    cursor.execute(f"""
+                        INSERT INTO manage_conversation_conversation
+                        (contact_id, platform_id, organization_id, open_by, status, subject, thread_id, created_at, updated_at)
+                        VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, NOW(), NOW())
+                        RETURNING id
+                    """, (contact_id, platform_id, organization_id, 'customer', 'new', normalized_subject, thread_id))
+                    conversation_id = cursor.fetchone()[0]
+                    is_conversation_new = True
+                message_type = message_type if not file_type_map else json.dumps(file_type_map)
+                # 6. Insert into incoming messages
+                cursor.execute(f"""
+                    INSERT INTO manage_conversation_incomingmessage
+                    (conversation_id, contact_id, platform_id, organization_id,
+                     message_body, message_type, messageid, content_blocks, status, status_details, received_time, created_at)
+                    VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, 'unread', {self.param}, {self.param}, NOW())
+                    RETURNING id, received_time
+                """, (conversation_id, contact_id, platform_id, organization_id,
+                      message_body, message_type, message_id, json.dumps(content_blocks), json.dumps(file_ids), received_time))
+                msg_row = cursor.fetchone()
+                # 7. Emit via Socket.IO
+                payload = {
+                    'id': contact_id,
+                    'conversation_id': conversation_id,
+                    'received_time': msg_row[1].isoformat() if not self.use_sqlite else msg_row[1],
+                    'message_type': message_type,
+                    'message_body': message_body,
+                    'status': 'unread',
+                    'status_details': None,
+                    'type': 'customer',
+                    'msg_from_type': 'CUSTOMER',
+                    'organization_id': organization_id,
+                    'customer_name': sender_email_addr,
+                    'is_conversation_new': is_conversation_new,
+                    'media_urls': medial_urls_for_client,
+                    'content_blocks': content_blocks
+                }
+                self.sio.emit("whatsapp_chat", payload)
+                self.logger.info("📩 Gmail message saved for conversation_id: %s", conversation_id)
+        except Exception as e:
+            self.logger.error("❌ Error in handle_customer_message_gmail: %s", e, exc_info=True)
 
     def consume(self):
         config = self.read_config()
@@ -849,3 +1025,4 @@ if __name__ == "__main__":
         consumer.consume()
     else:
         WhatsAppKafkaConsumer().devlmode()
+

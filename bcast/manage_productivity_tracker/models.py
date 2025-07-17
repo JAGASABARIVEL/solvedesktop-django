@@ -3,7 +3,7 @@ from django.conf import settings
 
 class AppUsage(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    system = models.CharField(max_length=255)  # NEW
+    system = models.CharField(max_length=255, default='Default System')  # NEW
     event_id = models.IntegerField(default=-1)
     app_name = models.CharField(max_length=255)
     window_title = models.TextField()
@@ -29,7 +29,7 @@ class AppUsage(models.Model):
 
 class AFKEvent(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    system = models.CharField(max_length=255)  # NEW
+    system = models.CharField(max_length=255, default='Default System')  # NEW
     event_id = models.IntegerField(default=-1)
     start_time = models.DateTimeField()
     duration = models.FloatField(help_text="Duration in seconds")

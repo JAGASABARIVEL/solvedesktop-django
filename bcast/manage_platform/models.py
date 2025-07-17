@@ -44,3 +44,20 @@ class ProcessedGmailMessage(models.Model):
     gmail_account = models.ForeignKey(GmailAccount, on_delete=models.CASCADE, related_name='processed_messages')
     message_id = models.CharField(max_length=255, unique=True)
     processed_at = models.DateTimeField(auto_now_add=True)
+
+
+class BlockedContact(models.Model):
+    platform = models.ForeignKey(Platform, on_delete=models.CASCADE, related_name='blocked_contacts')
+    contact_value = models.TextField(help_text="Phone number or email address to block")
+    contact_type = models.CharField(max_length=20, choices=[('whatsapp', 'WhatsApp'), ('messenger', 'Messenger'), ('telegram', 'Telegram'), ('gmail', 'Gmail'), ('webchat', 'Webchat')])
+    reason = models.TextField(blank=True, null=True)
+    blocked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    blocked_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        unique_together = ('platform', 'contact_value')
+        indexes = [
+            models.Index(fields=['platform', 'contact_value']),
+        ]
+    def __str__(self):
+        return f"{self.contact_value} blocked on {self.platform.user_platform_name}"
+

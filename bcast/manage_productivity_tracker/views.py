@@ -61,7 +61,7 @@ def my_summary(request):
 def org_summary(request):
     request_user = request.user
     # Check if user is allowed
-    if not request_user.is_productivity_enable:
+    if not request_user.is_productivity_enable or request_user.user_type != 'owner':
         return Response({"error": "Not authorized to access this application"}, status=HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS)
     # Get the organization of the requesting user
     user_org = request_user.enterprise_profile.organization
@@ -88,7 +88,7 @@ def org_summary(request):
 @permission_classes([IsAuthenticated])
 def user_detail(request, user_id):
     request_user = request.user
-    if not request_user.is_productivity_enable:
+    if not request_user.is_productivity_enable  or request_user.user_type != 'owner':
         return Response({"error": "Not authorized to access this application"}, status=HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS)
     user_org = request_user.enterprise_profile.organization
     try:
@@ -119,7 +119,7 @@ def user_detail(request, user_id):
 def app_usage_summary(request):
     request_user = request.user
     # Check if user is allowed
-    if not request_user.is_productivity_enable:
+    if not request_user.is_productivity_enable  or request_user.user_type != 'owner':
         return Response({"error": "Not authorized to access this application"}, status=HTTP_451_UNAVAILABLE_FOR_LEGAL_REASONS)
     # Get organization users
     user_org = request_user.enterprise_profile.organization
@@ -135,50 +135,52 @@ def app_usage_summary(request):
 
 
 from dateutil.parser import parse
+from django.db import transaction
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def sync_activity_data(request):
     user = User.objects.get(email=request.data['email'])
     system = request.data.get('system', 'default')
-
     # Process window (app usage) events
-    for event in request.data.get('window_events', []):
+    window_events = sorted(request.data.get('window_events', []), key=lambda e: int(e['id']))
+    for event in window_events:
+        start_time = parse(event['timestamp'])
         AppUsage.objects.update_or_create(
             user=user,
             system=system,
             event_id=event['id'],
             defaults={
-                'start_time': event['timestamp'],
+                'start_time': start_time,
                 'duration': event['duration'],
                 'app_name': event['data']['app'],
                 'window_title': event['data'].get('title', ''),
                 'productivity_tag': tag_productivity(event['data']['app']),
             }
         )
-
     # Process AFK events
-    for event in request.data.get('afk_events', []):
+    afk_events = sorted(request.data.get('afk_events', []), key=lambda e: int(e['id']))
+    for event in afk_events:
         event_id = event['id']
-        start_time = event['timestamp']
+        start_time = parse(event['timestamp'])
         duration = event['duration']
         is_afk = event['data']['status'] == 'afk'
-
+        # Step 1: Avoid duplicates entirely
+        if AFKEvent.objects.filter(user=user, system=system, event_id=event_id).exists():
+            continue  # Skip duplicate event_id
+        # Step 2: Get last event for this user/system
+        last_event = AFKEvent.objects.filter(user=user, system=system).order_by('-event_id').first()
         if is_afk:
-            last_event = AFKEvent.objects.filter(user=user, system=system).order_by('-event_id').first()
             if last_event and last_event.is_afk:
-                last_event.event_id = event_id
-                last_event.start_time = start_time
-                last_event.duration = 0  # You can customize this logic
-                last_event.save()
+                # Already in afk state — don’t insert another afk row
                 continue
         else:
-            last_event = AFKEvent.objects.filter(user=user, system=system).order_by('-event_id').first()
             if last_event and last_event.is_afk:
-                start_time_converted = parse(event['timestamp'])
-                last_event.duration = (start_time_converted - last_event.start_time).total_seconds()
+                # End previous AFK session
+                last_event.duration = (start_time - last_event.start_time).total_seconds()
                 last_event.save()
-
         AFKEvent.objects.update_or_create(
             user=user,
             system=system,
@@ -189,5 +191,5 @@ def sync_activity_data(request):
                 'is_afk': is_afk,
             }
         )
-
     return Response({"status": "success"})
+

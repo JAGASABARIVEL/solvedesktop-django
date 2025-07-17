@@ -1,3 +1,4 @@
+import json
 from rest_framework import serializers
 from manage_files.models import File
 from .models import Conversation, IncomingMessage, UserMessage
@@ -6,14 +7,15 @@ from .models import Conversation, IncomingMessage, UserMessage
 class IncomingMessageSerializer(serializers.ModelSerializer):
     type = serializers.CharField(default='customer')
     media_url = serializers.SerializerMethodField()
+    media_urls = serializers.SerializerMethodField()
 
     class Meta:
         model = IncomingMessage
-        fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'received_time', 'media_url')
+        fields = ('id', 'type', 'message_type', 'message_body', 'content_blocks', 'status', 'status_details', 'received_time', 'media_url', 'media_urls')
     
     def get_media_url(self, obj):
-        if obj.message_type not in ['text', 'template']:
-            file_id = int(obj.status_details) if (obj.status_details.isdigit()) else -1
+        if obj.message_type not in ['text', 'template', 'text+image'] and obj.status_details and obj.status_details not in [None]:
+            file_id = int(obj.status_details) if obj.status_details.isdigit() else -1
             if file_id:
                 try:
                     file = File.objects.get(id=file_id)
@@ -23,19 +25,42 @@ class IncomingMessageSerializer(serializers.ModelSerializer):
                 except File.DoesNotExist:
                     return None
         return None
+    def get_media_urls(self, obj):
+        urls = []
+        try:
+            file_ids = json.loads(obj.status_details or "[]")
+            type_map = json.loads(obj.message_type or "{}")
+            for file_id in file_ids:
+                try:
+                    file = File.objects.get(id=file_id)
+                    if not file.is_signed_url_valid():
+                        file.refresh_signed_url()
+                    urls.append({
+                        "url": file.signed_url,
+                        "type": type_map.get(str(file_id), "application/octet-stream"),
+                        "filename": file.name
+                    })
+                except File.DoesNotExist:
+                    continue
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return urls
+
+
 
 class UserMessageSerializer(serializers.ModelSerializer):
     type = serializers.CharField(default='org')
     sender = serializers.IntegerField(source='user_id')
     media_url = serializers.SerializerMethodField()
+    media_urls = serializers.SerializerMethodField()
 
     class Meta:
         model = UserMessage
-        fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'sent_time', 'sender', 'template', 'media_url')
+        fields = ('id', 'type', 'message_type', 'message_body', 'status', 'status_details', 'sent_time', 'sender', 'template', 'media_url', 'media_urls')
     
     def get_media_url(self, obj):
-        if obj.message_type not in ['text'] and obj.status_details not in [None] and obj.status != 'failed':
-            file_id = int(obj.status_details) if (obj.status_details.isdigit()) else -1
+        if obj.message_type not in ['text', 'text+image'] and obj.status_details and obj.status_details not in [None] and obj.status != 'failed':
+            file_id = int(obj.status_details) if obj.status_details.isdigit() else -1
             if file_id:
                 try:
                     file = File.objects.get(id=file_id)
@@ -45,6 +70,27 @@ class UserMessageSerializer(serializers.ModelSerializer):
                 except File.DoesNotExist:
                     return None
         return None
+    def get_media_urls(self, obj):
+        """Supports multiple file IDs (as JSON string) in status_details"""
+        urls = []
+        try:
+            file_ids = json.loads(obj.status_details or "[]")
+            type_map = json.loads(obj.message_type or "{}")
+            for file_id in file_ids:
+                try:
+                    file = File.objects.get(id=file_id)
+                    if not file.is_signed_url_valid():
+                        file.refresh_signed_url()
+                    urls.append({
+                        "url": file.signed_url,
+                        "type": type_map.get(str(file_id), "application/octet-stream"),
+                        "filename": file.name
+                    })
+                except File.DoesNotExist:
+                    continue
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return urls
 
 from manage_contact.models import Contact, ContactCustomFieldValue
 class ContactCustomFieldValueSerializer(serializers.ModelSerializer):
@@ -76,7 +122,7 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Conversation
-        fields = ('id', 'contact', 'assigned', 'organization', 'status', 'created_at', 'updated_at', 'open_by', 'closed_by', 'closed_reason', 'messages')
+        fields = ('id', 'contact', 'assigned', 'organization', 'status', 'subject', 'created_at', 'updated_at', 'open_by', 'closed_by', 'closed_reason', 'messages')
 
     def get_assigned(self, obj):
         if obj.assigned_user:
