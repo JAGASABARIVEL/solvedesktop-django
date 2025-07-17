@@ -29,6 +29,7 @@ urlpatterns = [
     path('campaign/', include('manage_campaign.urls')),
     path('files/', include('manage_files.urls')), # new
     path('subscriptions/', include('manage_subscriptions.urls')),
-    path('productivity/', include('manage_productivity_tracker.urls'))
+    path('productivity/', include('manage_productivity_tracker.urls')),
+    path('database_sync/', include('manage_local_database_sync.urls'))
     #path("auth/", include("rest_framework.urls")), # added
 ]

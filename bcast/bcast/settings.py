@@ -119,7 +119,8 @@ INSTALLED_APPS = [
     'manage_subscriptions',
     'manage_files',
     'manage_email',
-    'manage_productivity_tracker'
+    'manage_productivity_tracker',
+    'manage_local_database_sync'
 ]
 
 MIDDLEWARE = [
