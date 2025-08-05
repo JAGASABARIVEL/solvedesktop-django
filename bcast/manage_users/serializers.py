@@ -113,6 +113,7 @@ class EnterpriseOwnerRegistrationSerializer(serializers.Serializer):
 class EmployeeRegistrationSerializer(serializers.Serializer):
     employee_id = serializers.IntegerField()
     uuid = serializers.CharField(required=False, allow_null=True)
+    employment_role = serializers.CharField(required=True, allow_null=False)
     #organization = serializers.PrimaryKeyRelatedField(queryset=Organization.objects.all(), required=True)
 
     def validate(self, attrs):
@@ -122,8 +123,8 @@ class EmployeeRegistrationSerializer(serializers.Serializer):
         employee_user = CustomUser.objects.filter(id=employee_id).first()
         if employee_user.is_superuser:
             raise serializers.ValidationError(f"Emplyoee '{employee_user.email}' is not allowed to be part of any organiztion")
-        if employee_user.user_type in {"owner", "agent"}:
-            raise serializers.ValidationError(f"Owner / Agent '{employee_user.email}' is not allowed to be added as an employee")
+        if employee_user.user_type in {"owner", "agent", "intern", "manager", "nontech"}:
+            raise serializers.ValidationError(f"Owner / Agent / Intern / Manager / NonTech '{employee_user.email}' is not allowed to be added as an employee")
         enterprise_user = EnterpriseProfile.objects.filter(user_id=employee_id).first()
         if enterprise_user:
             raise serializers.ValidationError("Employee already part of the organization")
@@ -133,6 +134,7 @@ class EmployeeRegistrationSerializer(serializers.Serializer):
         try:
             with transaction.atomic():
                 uuid = validated_data.get('uuid', None)
+                employment_role = validated_data.get('employment_role', 'employee')
                 employee_id = validated_data.get('employee_id', None)
                 # Retrieve user and data
                 user = self.context['request'].user
@@ -148,7 +150,7 @@ class EmployeeRegistrationSerializer(serializers.Serializer):
                     },
                 )
                 # Ensure user is marked as an employee and registration is complete
-                employee_user.user_type = 'employee'
+                employee_user.user_type = employment_role
                 employee_user.is_registration_complete = True
                 employee_user.save()
                 return employee_user

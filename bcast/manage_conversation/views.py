@@ -271,31 +271,166 @@ class ConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def close_conversation(self, request, pk=None):
         conversation = get_object_or_404(Conversation, pk=pk)
-        with transaction.atomic():
-                # Right now we dont have anyother way to confirm the delivery since its through websocket and not webhook to confirm the delivery
-                IncomingMessage.objects.filter(conversation=conversation).update(status='responded')
-                Conversation.objects.filter(id=conversation.id).update(
-                    status='closed',
-                    assigned_user=request.user,
-                    closed_by=request.user,
-                    closed_reason=request.data.get('reason', '')
+        user = request.user
+        enterprise_profile = getattr(user, "enterprise_profile", None)
+        org = getattr(enterprise_profile, "organization", None)
+        owner_user = org.owner
+        platform = conversation.platform
+        message_type = "text"
+        message_id = None
+        status_value = None
+        error_message = None
+        message_body = "Thank you for being our privileged customer and we’re closing this conversation now. If you need any further assistance, please feel free to message us again. We’re always here to help!\n\n- {organization_name}"
+        if platform.platform_name == "gmail":
+            latest_incoming = (
+                IncomingMessage.objects
+                .filter(conversation=conversation, messageid__isnull=False)
+                .order_by('-received_time')
+                .first()
+            )
+            message_id = latest_incoming.messageid if latest_incoming else None
+        # To handle if there is a conversation started by support first and responding to same message again
+        if not message_id:
+            latest_sentmsg = (
+                UserMessage.objects
+                .filter(conversation=conversation, messageid__isnull=False)
+                .order_by('-sent_time')
+                .first()
                 )
+            message_id = latest_sentmsg.messageid if latest_sentmsg else None
+        try:
+            response = send_message(
+                platform_id=conversation.platform_id,
+                recipient_id=conversation.contact_id,
+                message_body=message_body.format(organization_name=org.name),
+                message_type=message_type,
+                conversation=conversation,
+                thread_id=conversation.thread_id,
+                message_id=message_id
+            )
+            platform = Platform.objects.get(id=conversation.platform_id)
+            platform_name = platform.platform_name
+            if platform_name == "gmail":
+                message_id = response.get("messageid")
+            elif platform_name.startswith('messenger'):
+                message_id = int(python_time.time() * 1000)  # milliseconds
+            elif platform_name.startswith('whatsapp'):
+                message_id = response.json().get('messages', [{}])[0].get('id', 'unknown') if response else None
+                status_value = 'sent_to_server' if platform.platform_name not in PLATFORM_NOT_SUPPORTED_WEBHOOK else 'sent'
+                error_message = None
+        except Exception as e:
+            message_id = 'Cannot send'
+            status_value = 'failed'
+            error_message = str(e)
+        with transaction.atomic():
+            # Right now we dont have anyother way to confirm the delivery since its through websocket and not webhook to confirm the delivery
+            IncomingMessage.objects.filter(conversation=conversation).update(status='responded')
+            Conversation.objects.filter(id=conversation.id).update(
+                status='closed',
+                assigned_user=request.user,
+                closed_by=request.user,
+                closed_reason=request.data.get('reason', '')
+            )
+            UserMessage.objects.create(
+                conversation=conversation,
+                organization=conversation.organization,
+                platform=platform,
+                user=user,
+                message_body=message_body.format(organization_name=org.name),
+                status=status_value,
+                messageid=message_id,
+                template=None,
+                status_details=error_message, # Using status_dertauls to persists file id since it would None if there are no errors
+                message_type=message_type
+            )
         return Response({'status': 'conversation closed'})
     
     @action(detail=True, methods=['post'])
     def assign_conversation(self, request, pk=None):
         conversation = get_object_or_404(Conversation, pk=pk)
         user_id = request.data.get('id')
-
+        user = None
         try:
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        enterprise_profile = getattr(request.user, "enterprise_profile", None)
+        org = getattr(enterprise_profile, "organization", None)
+        owner_user = org.owner
+        platform = conversation.platform
+        message_type = "text"
+        message_id = None
+        status_value = None
+        error_message = None
+        message_body = "We wanted to inform you that your query has now been assigned to our consultant {consultant_name} and they will assist you from here and ensure you get the support you need.\n\nThank you for your patience and continued trust in us!\n\n- {organization_name}"
+        if platform.platform_name == "gmail":
+            latest_incoming = (
+                IncomingMessage.objects
+                .filter(conversation=conversation, messageid__isnull=False)
+                .order_by('-received_time')
+                .first()
+            )
+            message_id = latest_incoming.messageid if latest_incoming else None
+        # To handle if there is a conversation started by support first and responding to same message again
+        if not message_id:
+            latest_sentmsg = (
+                UserMessage.objects
+                .filter(conversation=conversation, messageid__isnull=False)
+                .order_by('-sent_time')
+                .first()
+                )
+            message_id = latest_sentmsg.messageid if latest_sentmsg else None
+        try:
+            response = send_message(
+                platform_id=conversation.platform_id,
+                recipient_id=conversation.contact_id,
+                message_body=message_body.format(
+                    consultant_name=user.username,
+                    organization_name=org.name
+                ),
+                message_type=message_type,
+                conversation=conversation,
+                thread_id=conversation.thread_id,
+                message_id=message_id
+            )
+            platform = Platform.objects.get(id=conversation.platform_id)
+            platform_name = platform.platform_name
+            if platform_name == "gmail":
+                message_id = response.get("messageid")
+            elif platform_name.startswith('messenger'):
+                message_id = int(python_time.time() * 1000)  # milliseconds
+            elif platform_name.startswith('whatsapp'):
+                message_id = response.json().get('messages', [{}])[0].get('id', 'unknown') if response else None
+                status_value = 'sent_to_server' if platform.platform_name not in PLATFORM_NOT_SUPPORTED_WEBHOOK else 'sent'
+                error_message = None
+        except Exception as e:
+            message_id = 'Cannot send'
+            status_value = 'failed'
+            error_message = str(e)
+        with transaction.atomic():
+            # Right now we dont have anyother way to confirm the delivery since its through websocket and not webhook to confirm the delivery
+            IncomingMessage.objects.filter(conversation=conversation).update(status='responded')
+            Conversation.objects.filter(id=conversation.id).update(
+                status='active',
+                assigned_user=user,
+                updated_at = now()
+            )
+            UserMessage.objects.create(
+                conversation=conversation,
+                organization=conversation.organization,
+                platform=platform,
+                user=user,
+                message_body=message_body.format(
+                    consultant_name=user.username,
+                    organization_name=org.name
+                ),
+                status=status_value,
+                messageid=message_id,
+                template=None,
+                status_details=error_message, # Using status_dertauls to persists file id since it would None if there are no errors
+                message_type=message_type
+            )
 
-        conversation.assigned_user = user
-        conversation.status = 'active'
-        conversation.updated_at = now()
-        conversation.save()
         return Response({
             'message': 'Conversation assigned successfully',
             'conversation_id': conversation.id,

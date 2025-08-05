@@ -324,7 +324,7 @@ class FileUploadView(generics.CreateAPIView):
 
 class OrganizationQuerysetMixin:
     def get_queryset(self):
-        if not self.request.user.user_type in {"owner", "employee", "agent"}:
+        if not self.request.user.user_type in {"owner", "employee", "agent", "intern", "manager", "nontech"}:
             return super().get_queryset()
         user_org = self.request.user.enterprise_profile.organization
         if user_org:
@@ -731,3 +731,4 @@ class CostReportView(APIView):
             "excess_credit": excess_credit
         }
         return Response(CostReportSerializer(data).data)
+

@@ -270,6 +270,7 @@ class CampaignScheduleMonitor:
                 scheduled_message.template
             )
             if formatted_message.get(recipient.phone, None) is None:
+                self.logger.warning("Excel template is wrong")
                 return
             platform = scheduled_message.platform
             organization = scheduled_message.organization
@@ -330,6 +331,7 @@ class CampaignScheduleMonitor:
             )
             return response['messages'][0].get('message_status') in self.MSG_SENT
         except Exception as e:
+            self.logger.error(f"Failed delivery {str(e)}")
             traceback.print_exc()
             self.update_user_message_model(
                 cursor,
@@ -386,8 +388,10 @@ class CampaignScheduleMonitor:
                     """, ('in_progress',schedule_id,))
                     conn.commit()
                     recipients = self.get_recipients(conn, recipient_type, recipient_id)
+                    self.logger.warning(f"recipients {recipients}")
                     successful_deliveries = 0
                     for recipient in recipients:
+                        self.logger.info(f"Processing recipient {recipient}")
                         recipient_obj = SimpleNamespace(id=recipient[0], phone=recipient[2])
                         scheduled_msg_obj = SimpleNamespace(
                             id=schedule_id,
@@ -403,9 +407,11 @@ class CampaignScheduleMonitor:
                             organization=SimpleNamespace(id=organization[0], owner_id=organization[1])
                         )
                         status = self.process_recipient(conn, recipient_obj, template or message_body, scheduled_msg_obj)
+                        self.logger.info(f"Processed campaign status {status}")
                         successful_deliveries += 1 if status else 0
                     # Reschedule or complete/failed
                     if successful_deliveries == 0:
+                        self.logger.error("No successful deliveries")
                         cursor.execute(f"""
                             UPDATE manage_campaign_scheduledmessage
                             SET status={self.param}

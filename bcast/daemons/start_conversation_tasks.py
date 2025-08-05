@@ -11,6 +11,7 @@ import base64
 import mimetypes
 import pytz
 import re
+import uuid
 from email.utils import parseaddr
 
 import jwt
@@ -22,6 +23,10 @@ import socketio
 import requests
 from confluent_kafka import Consumer as ConfluentConsumer, KafkaError
 from decouple import config
+
+from VendorApi.Whatsapp.message import TextMessage
+
+AUTO_ASSIGNMENT_MSG = 'Thank you for reaching out!\n\nMr./Mrs. {consultant_name} is now assigned as your consultant for this conversation. Please feel free to reach out for any assistance.\n\n{organization_name}'
 
 os.environ["PRODUCTION"] = config("PRODUCTION")
 os.environ["SQLITE_DB"] = 'db.sqlite3'
@@ -53,6 +58,137 @@ def generate_forever_token():
     return token
 
 
+class AutoAssigner:
+    def __init__(self, logger, param_style):
+        self.logger = logger
+        self.param = param_style  # '?' or '%s'
+
+    def get_organization_config(self, cursor, org_id):
+        cursor.execute(
+            f"SELECT auto_allocation_enabled, auto_allocation_algorithm, owner_id FROM manage_organization_organization WHERE id = {self.param}",
+            (org_id,)
+        )
+        return cursor.fetchone()
+
+    def get_employees(self, cursor, org_id, owner_id):
+        excluded_types = ('individual', 'agent', 'intern', 'manager', 'nontech')
+        param_placeholders = ', '.join([self.param] * len(excluded_types))  # "%s, %s" or "?, ?"
+        if owner_id:
+            query = f"""
+                SELECT ep.user_id
+                FROM manage_users_enterpriseprofile ep
+                INNER JOIN manage_users_customuser u ON ep.user_id = u.id
+                WHERE ep.organization_id = {self.param}
+                  AND u.user_type NOT IN ({param_placeholders})
+                  AND ep.user_id != {self.param}
+            """
+            params = (org_id, *excluded_types, owner_id)
+        else:
+            query = f"""
+                SELECT ep.user_id
+                FROM manage_users_enterpriseprofile ep
+                INNER JOIN manage_users_customuser u ON ep.user_id = u.id
+                WHERE ep.organization_id = {self.param}
+                  AND u.user_type NOT IN ({param_placeholders})
+            """
+            params = (org_id, *excluded_types)
+        cursor.execute(query, params)
+        return [row[0] for row in cursor.fetchall()]
+
+
+    def get_round_robin_user(self, cursor, org_id, employee_ids):
+        if not employee_ids:
+            return None
+        cursor.execute(
+            f"""
+            SELECT assigned_user_id
+            FROM manage_conversation_conversation
+            WHERE organization_id = {self.param}
+              AND assigned_user_id IS NOT NULL
+              AND status != 'closed'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (org_id,)
+        )
+        last = cursor.fetchone()
+        if not last:
+            return employee_ids[0]
+        last_id = last[0]
+        try:
+            idx = employee_ids.index(last_id)
+            return employee_ids[(idx + 1) % len(employee_ids)]
+        except ValueError:
+            return employee_ids[0]
+
+    def get_bandwidth_user(self, cursor, org_id, employee_ids):
+        if not employee_ids:
+            return None
+        min_user = None
+        min_count = float('inf')
+        for uid in employee_ids:
+            cursor.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM manage_conversation_conversation
+                WHERE organization_id = {self.param} AND assigned_user_id = {self.param} AND status != 'closed'
+                """,
+                (org_id, uid)
+            )
+            count = cursor.fetchone()[0]
+            if count < min_count:
+                min_user = uid
+                min_count = count
+        return min_user
+
+    def assign_conversation(self, cursor, conv_id, user_id):
+        cursor.execute(
+            f"""
+            UPDATE manage_conversation_conversation
+            SET assigned_user_id = {self.param}, status = 'active'
+            WHERE id = {self.param}
+            """,
+            (user_id, conv_id)
+        )
+
+    def get_employee_name(self, cursor, user_id):
+        cursor.execute(
+            f"""
+            SELECT username
+            FROM manage_users_customuser
+            WHERE id = {self.param}
+            """,
+            (user_id,)
+        )
+        employee_record = cursor.fetchone()
+        return employee_record[0]
+
+    def auto_assign(self, cursor, conv_id, org_id):
+        config = self.get_organization_config(cursor, org_id)
+        if not config:
+            return None
+        enabled, algorithm, owner_id = config
+        if not enabled:
+            return None
+        employee_ids = self.get_employees(cursor, org_id, owner_id)
+        self.logger.info(f"employees {employee_ids}")
+        if not employee_ids:
+            return None
+        if algorithm == 'rr':
+            user_id = self.get_round_robin_user(cursor, org_id, employee_ids)
+        elif algorithm == 'bw':
+            user_id = self.get_bandwidth_user(cursor, org_id, employee_ids)
+        else:
+            return None
+        if user_id:
+            self.assign_conversation(cursor, conv_id, user_id)
+            # Get username from employees list
+            username = self.get_employee_name(cursor, user_id)
+            self.logger.info(f"Employee name {username}")
+            return (user_id, username)
+        return (None,None)
+
+
 class WhatsAppKafkaConsumer:
     def __init__(self):
         self.use_sqlite = os.getenv("PRODUCTION") == '0'
@@ -62,7 +198,7 @@ class WhatsAppKafkaConsumer:
         self.group_id = os.getenv("KAFKA_CONFIG_GRP_ID")
         self.sio = socketio.Client()
         self.access_token = generate_forever_token()
-        self.retry_org_queue = {"whatsapp": []}
+        self.retry_org_queue = {"whatsapp": {}}
         if not self.access_token:
             raise Exception("Cannot generate access token to connect with websocket server")
         self.sio.connect(os.getenv("SOCKET_URL").format(access_token=self.access_token))
@@ -77,6 +213,10 @@ class WhatsAppKafkaConsumer:
             format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
         )
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.auto_assigner = AutoAssigner(
+            logger=self.logger,
+            param_style='?' if self.use_sqlite else '%s'
+        )
 
     @contextmanager
     def get_conn(self, auto_commit=True):
@@ -400,12 +540,12 @@ class WhatsAppKafkaConsumer:
             file_id = None
             with self.get_conn() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f"SELECT id, owner_id, login_credentials FROM manage_platform_platform WHERE login_id={self.param}", (phone_number_id,))
+                cursor.execute(f"SELECT id, owner_id, login_credentials, login_id FROM manage_platform_platform WHERE login_id={self.param}", (phone_number_id,))
                 platform_row = cursor.fetchone()
                 if not platform_row:
                     self.logger.warning("Platform not found for phone_number_id: %s", phone_number_id)
                     return
-                platform_id, owner_id, login_credentials = platform_row
+                platform_id, owner_id, login_credentials, login_id = platform_row
                 # Blocked contact check BEFORE creating/fetching contact
                 cursor.execute(f"""
                     SELECT 1 FROM manage_platform_blockedcontact
@@ -419,7 +559,7 @@ class WhatsAppKafkaConsumer:
 
                 signed_url = None
                 if message_type != "text":
-                    message_body_copy = message_body_copy.get("caption") or "No_Caption"
+                    message_body_copy = message_body_copy.get("caption") or f"No_Caption_{time.time()}_{uuid.uuid4().hex}"
                     cursor.execute(f"SELECT user_id from manage_users_enterpriseprofile where user_id={self.param}", (owner_id,))
                     enterprise_profile = cursor.fetchone()
                     if not enterprise_profile:
@@ -437,12 +577,12 @@ class WhatsAppKafkaConsumer:
                             media_file_name = message_body_copy + "." + message_type.split('/')[-1]
                         file_id, signed_url = self.save_media_file_to_s3_raw_sql(conn, owner_email, recipient_id, media_file_name, file_data)
 
-                cursor.execute(f"SELECT id, owner_id FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
+                cursor.execute(f"SELECT id, owner_id, name FROM manage_organization_organization WHERE owner_id={self.param}", (owner_id,))
                 org_row = cursor.fetchone()
                 if not org_row:
                     self.logger.warning("Organization not found for owner_id: %s", owner_id)
                     return
-                organization_id, org_owner_id = org_row
+                organization_id, org_owner_id, organization_name = org_row
 
                 contact_id, contact_name = None, None
                 cursor.execute(f"SELECT id, name FROM manage_contact_contact WHERE phone={self.param} AND organization_id={self.param}", (recipient_id, organization_id))
@@ -472,7 +612,26 @@ class WhatsAppKafkaConsumer:
                         VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id
                     """, (contact_id, platform_id, organization_id, 'customer', 'new', datetime.now(), datetime.now()))
                     conversation_id = cursor.fetchone()[0]
-
+                    assigned_user_id, consultant_name = self.auto_assigner.auto_assign(cursor=cursor, conv_id=conversation_id, org_id=organization_id)
+                    if assigned_user_id:
+                        self.logger.info(f"Conversation {conversation_id} auto-assigned to user {assigned_user_id}")
+                        text_message = TextMessage(
+                            phone_number_id=login_id,
+                            token=login_credentials
+                        )
+                        assignment_msg = AUTO_ASSIGNMENT_MSG.format(
+                            consultant_name=consultant_name,
+                            organization_name=organization_name
+                        )
+                        assignment_response = text_message.send_message(recipient_id, assignment_msg)
+                        assignment_message_id = assignment_response.json().get('messages', [{}])[0].get('id', 'unknown') if assignment_response else None
+                        assignment_status_value = 'sent_to_server'
+                        cursor.execute(f"""
+                            INSERT INTO manage_conversation_usermessage (conversation_id, organization_id, platform_id, user_id, message_body, status, messageid, template, status_details, message_type, sent_time)
+                            VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param})
+                        """, (conversation_id, organization_id, platform_id, assigned_user_id, assignment_msg, assignment_status_value, assignment_message_id, None, None, "text", datetime.now()))
+                    else:
+                        self.logger.info(f"Auto-assignment skipped for conversation {conversation_id}")
                 cursor.execute(f"""
                     INSERT INTO manage_conversation_incomingmessage (conversation_id, contact_id, platform_id, organization_id, message_body, message_type, status_details, status, received_time, created_at)
                     VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, 'unread', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -505,46 +664,71 @@ class WhatsAppKafkaConsumer:
             message_id = msg_data['message_id']
             message_status = msg_data['message_status']
             error_details = msg_data.get("error_details", None)
+    
             with self.get_conn() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f"SELECT id, conversation_id, organization_id FROM manage_conversation_usermessage WHERE messageid={self.param}", (message_id,))
+                cursor.execute(
+                    "SELECT id, conversation_id, organization_id FROM manage_conversation_usermessage WHERE messageid=%s",
+                    (message_id,)
+                )
                 row = cursor.fetchone()
+    
                 if row:
                     user_message_id, conversation_id, organization_id = row
                     if error_details:
                         self.logger.info("Found error_details")
-                        cursor.execute(f"""
-                            UPDATE manage_conversation_usermessage SET status={self.param}, status_details={self.param} WHERE id={self.param}
-                        """, (message_status, json.dumps(error_details), user_message_id))
+                        cursor.execute(
+                            "UPDATE manage_conversation_usermessage SET status=%s, status_details=%s WHERE id=%s",
+                            (message_status, json.dumps(error_details), user_message_id)
+                        )
                     else:
                         self.logger.info("No error_details found")
-                        cursor.execute(f"""
-                            UPDATE manage_conversation_usermessage SET status={self.param} WHERE conversation_id={self.param} AND status NOT IN ('failed', 'read')
-                        """, (message_status, conversation_id)) # Update all messages w.r.t conversation_id instead of specific user_message_id since all messages would have the same status by the action of customer like while opening and reading the message
-
-                    cursor.execute(f"""
-                        UPDATE manage_conversation_incomingmessage SET status='responded' WHERE conversation_id={self.param}
-                    """, (conversation_id,))
-
+                        cursor.execute(
+                            "UPDATE manage_conversation_usermessage SET status=%s WHERE conversation_id=%s AND status NOT IN ('failed', 'read')",
+                            (message_status, conversation_id)
+                        )
+    
+                    cursor.execute(
+                        "UPDATE manage_conversation_incomingmessage SET status='responded' WHERE conversation_id=%s",
+                        (conversation_id,)
+                    )
+    
                     self.logger.info("Updated message status for user_message_id: %s", user_message_id)
-
+    
                     self.sio.emit("whatsapp_chat", {
                         "conversation_id": conversation_id,
                         "msg_from_type": "ORG",
-                        'organization_id': organization_id,
+                        "organization_id": organization_id,
                     })
                 else:
-                    self.retry_org_queue["whatsapp"].append(msg_data)
+                    retry_entry = self.retry_org_queue["whatsapp"].setdefault(
+                        message_id, {"retry_count": 0, "msg_data": msg_data}
+                    )
+                    if retry_entry["retry_count"] < 5:
+                        retry_entry["retry_count"] += 1
+                        self.logger.warning("Retrying message_id %s, attempt %d", message_id, retry_entry["retry_count"])
+                    else:
+                        self.logger.error("Retry limit exceeded for message_id %s", message_id)
         except Exception as e:
             self.logger.critical("Error in handle_org_message_whatsapp: %s", e, exc_info=True)
 
-
     def retry_whatsapp_org_task(self):
         while True:
-            if self.retry_org_queue["whatsapp"]:
-                self.handle_org_message_whatsapp(self.retry_org_queue["whatsapp"].pop())
-            else:
+            try:
+                if self.retry_org_queue["whatsapp"]:
+                    # Create a shallow copy to iterate while mutating original
+                    retry_items = list(self.retry_org_queue["whatsapp"].items())
+                    for message_id, entry in retry_items:
+                        self.handle_org_message_whatsapp(entry["msg_data"])
+                        # Remove only if retried or max retries exceeded
+                        if entry["retry_count"] >= 5:
+                            del self.retry_org_queue["whatsapp"][message_id]
+                else:
+                    time.sleep(60)
+            except Exception as e:
+                self.logger.critical("Error in retry_whatsapp_org_task: %s", e, exc_info=True)
                 time.sleep(60)
+
 
     @staticmethod
     def get_messenger_user_profile(psid, page_access_token):
@@ -628,6 +812,11 @@ class WhatsAppKafkaConsumer:
                         VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id
                     """, (contact_id, platform_id, organization_id, 'customer', 'new', datetime.now(), datetime.now()))
                     conversation_id = cursor.fetchone()[0]
+                    assigned_user_id, consultant_name = self.auto_assigner.auto_assign(cursor=cursor, conv_id=conversation_id, org_id=organization_id)
+                    if assigned_user_id:
+                        self.logger.info(f"Conversation {conversation_id} auto-assigned to user {assigned_user_id}")
+                    else:
+                        self.logger.info(f"Auto-assignment skipped for conversation {conversation_id}")
                 cursor.execute(f"""
                     INSERT INTO manage_conversation_incomingmessage (conversation_id, contact_id, platform_id, organization_id, message_body, message_type, status_details, status, received_time, created_at)
                     VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, 'unread', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -778,6 +967,11 @@ class WhatsAppKafkaConsumer:
                         VALUES ({self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}, {self.param}) RETURNING id
                     """, (contact_id, platform_id, organization_id, 'customer', 'new', datetime.now(), datetime.now()))
                     conversation_id = cursor.fetchone()[0]
+                    assigned_user_id, consultant_name = self.auto_assigner.auto_assign(cursor=cursor, conv_id=conversation_id, org_id=organization_id)
+                    if assigned_user_id:
+                        self.logger.info(f"Conversation {conversation_id} auto-assigned to user {assigned_user_id}")
+                    else:
+                        self.logger.info(f"Auto-assignment skipped for conversation {conversation_id}")
 
                 # 4. Insert incoming message
                 cursor.execute(f"""
@@ -812,7 +1006,7 @@ class WhatsAppKafkaConsumer:
                 self.sio.emit("website_chatwidget_messages_back_to_front", payload_chat_widget_client)
         except Exception as e:
             self.logger.error("Error in handle_website_chatwidget_messages: %s", e, exc_info=True)
-    
+
     def normalize_subject(self, subject: str) -> str:
         # Remove Re:, Re[2]:, Fwd:, FW: etc.
         return re.sub(r'^(?:(re(\[\d+\])?|fw(d)?):\s*)+', '', subject, flags=re.IGNORECASE).strip()
@@ -892,14 +1086,50 @@ class WhatsAppKafkaConsumer:
                     if not owner_email_row:
                         raise Exception("Owner email not found")
                     owner_email = owner_email_row[0]
+                    #for attachment in attachments:
+                    #    try:
+                    #        filename = attachment.get("filename")
+                    #        mime_type = attachment.get("mime_type", "application/octet-stream")
+                    #        base64_data = attachment.get("data_base64")
+                    #        if not base64_data or not filename:
+                    #            continue
+                    #        file_data = BytesIO(base64.b64decode(base64_data))
+                    #        file_id, signed_url = self.save_media_file_to_s3_raw_sql(
+                    #            conn=conn,
+                    #            user_identifier=owner_email,
+                    #            receiver_name=sender_email_addr,
+                    #            filename=filename,
+                    #            file_data=file_data
+                    #        )
+                    #        file_ids.append(file_id)
+                    #        signed_urls.append(signed_url)
+                    #        file_type_map[file_id] = mime_type  # ✅ Track the MIME type per file
+                    #        medial_urls_for_client.append({
+                    #            "url": signed_url,
+                    #            "type": mime_type or "application/octet-stream",
+                    #            "filename": filename}
+                    #        )
+                    #    except Exception as ex:
+                    #        self.logger.error(f"Error saving attachment: {ex}", exc_info=True)
                     for attachment in attachments:
+                        file_path = None
                         try:
                             filename = attachment.get("filename")
                             mime_type = attachment.get("mime_type", "application/octet-stream")
                             base64_data = attachment.get("data_base64")
-                            if not base64_data or not filename:
+                            file_path = attachment.get("path")
+                            # Skip if no file source
+                            if not filename or (not base64_data and not file_path):
                                 continue
-                            file_data = BytesIO(base64.b64decode(base64_data))
+                            # Load file from base64 or file path
+                            if base64_data:
+                                file_data = BytesIO(base64.b64decode(base64_data))
+                            elif file_path:
+                                with open(file_path, "rb") as f:
+                                    file_data = BytesIO(f.read())
+                            else:
+                                continue
+                            # Upload to S3
                             file_id, signed_url = self.save_media_file_to_s3_raw_sql(
                                 conn=conn,
                                 user_identifier=owner_email,
@@ -909,14 +1139,18 @@ class WhatsAppKafkaConsumer:
                             )
                             file_ids.append(file_id)
                             signed_urls.append(signed_url)
-                            file_type_map[file_id] = mime_type  # ✅ Track the MIME type per file
+                            file_type_map[file_id] = mime_type
                             medial_urls_for_client.append({
                                 "url": signed_url,
-                                "type": mime_type or "application/octet-stream",
-                                "filename": filename}
-                            )
+                                "type": mime_type,
+                                "filename": filename
+                            })
                         except Exception as ex:
                             self.logger.error(f"Error saving attachment: {ex}", exc_info=True)
+                        else:
+                            if file_path:
+                                os.remove(file_path)
+
                 # 5. Fetch or create conversation by message_id
                 # AND LOWER(TRIM(REGEXP_REPLACE(subject, '^(re(\\[\\d+\\])?:|fw(d)?):\\s*', '', 'gi'))) = LOWER(%s)
                 cursor.execute("""
@@ -943,6 +1177,11 @@ class WhatsAppKafkaConsumer:
                         RETURNING id
                     """, (contact_id, platform_id, organization_id, 'customer', 'new', normalized_subject, thread_id))
                     conversation_id = cursor.fetchone()[0]
+                    assigned_user_id, consultant_name = self.auto_assigner.auto_assign(cursor=cursor, conv_id=conversation_id, org_id=organization_id)
+                    if assigned_user_id:
+                        self.logger.info(f"Conversation {conversation_id} auto-assigned to user {assigned_user_id}")
+                    else:
+                        self.logger.info(f"Auto-assignment skipped for conversation {conversation_id}")
                     is_conversation_new = True
                 message_type = message_type if not file_type_map else json.dumps(file_type_map)
                 # 6. Insert into incoming messages
@@ -1020,9 +1259,8 @@ from threading import Thread
 if __name__ == "__main__":
     if os.environ["PRODUCTION"] == '1':
         consumer = WhatsAppKafkaConsumer()
-        whatsapp_org_incomplete_task = Thread(target=consumer.retry_whatsapp_org_task, daemon=True)
-        whatsapp_org_incomplete_task.start()
+        #whatsapp_org_incomplete_task = Thread(target=consumer.retry_whatsapp_org_task, daemon=True)
+        #whatsapp_org_incomplete_task.start()
         consumer.consume()
     else:
         WhatsAppKafkaConsumer().devlmode()
-

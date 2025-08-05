@@ -8,9 +8,22 @@ import hmac
 import hashlib
 import psycopg2
 from contextlib import contextmanager
+import base64
+import json
+import re
+from html import escape
 
 from flask import Flask, request, jsonify
+
 from confluent_kafka import Producer, KafkaError
+
+from bs4 import BeautifulSoup
+
+from google.auth.transport.requests import Request
+from googleapiclient.errors import HttpError
+from google.auth.exceptions import RefreshError
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 from decouple import config
 
@@ -66,6 +79,7 @@ TOPIC = 'whatsapp'
 def read_config():
     return {
         "bootstrap.servers": "localhost:9092",
+        "message.max.bytes": 1000000000,  # 953 MB - MAX allowed
         "client.id": "jackdesk-webhook-1",
         "acks": "all",
         "retries": 3
@@ -403,17 +417,108 @@ def messenger_webhook():
             logger.debug(traceback.format_exc())
             return jsonify({"status": "error", "message": str(e)}), 400
 
+"""
+def extract_attachments(service, user_id, payload, msg_id):
+    attachments = []
+    def walk_parts(parts):
+        for part in parts:
+            filename = part.get("filename")
+            body = part.get("body", {})
+            mime_type = part.get("mimeType", "")
+            attachment_id = body.get("attachmentId")
+            if filename and attachment_id:
+                attachment = service.users().messages().attachments().get(
+                    userId=user_id, messageId=msg_id, id=attachment_id
+                ).execute()
+                data = base64.urlsafe_b64decode(attachment.get("data").encode("UTF-8"))
+                file_path = os.path.join(base_path, filename)
+                with open(file_path, "wb") as f:
+                    f.write(data)
+                attachments.append({
+                    "filename": filename,
+                    "mime_type": mime_type,
+                    "data_base64": base64.b64encode(data).decode("utf-8")
+                })
+            elif part.get("parts"):
+                walk_parts(part["parts"])
+    if payload.get("parts"):
+        walk_parts(payload["parts"])
+    return attachments
+"""
 
-
-#from yourapp.models import get_gmail_account_by_email
-#from yourapp.utils import poll_history
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from django.utils.timezone import make_aware
-from datetime import datetime
 import base64
-import json
-from google.auth.transport.requests import Request
+import os
+import time
+
+def extract_attachments(service, user_id, payload, msg_id, sender_email):
+    attachments = []
+    # Create a unique path for this message's attachments
+    timestamp = str(time.time())
+    base_path = f"/tmp/{sender_email}/{timestamp}"
+    os.makedirs(base_path, exist_ok=True)
+    def walk_parts(parts):
+        for part in parts:
+            filename = part.get("filename")
+            body = part.get("body", {})
+            mime_type = part.get("mimeType", "")
+            attachment_id = body.get("attachmentId")
+            if filename and attachment_id:
+                attachment = service.users().messages().attachments().get(
+                    userId=user_id, messageId=msg_id, id=attachment_id
+                ).execute()
+                data = base64.urlsafe_b64decode(attachment.get("data").encode("UTF-8"))
+                file_path = os.path.join(base_path, filename)
+                with open(file_path, "wb") as f:
+                    f.write(data)
+                attachments.append({
+                    "filename": filename,
+                    "mime_type": mime_type,
+                    "path": file_path
+                })
+            elif part.get("parts"):
+                walk_parts(part["parts"])
+
+    if payload.get("parts"):
+        walk_parts(payload["parts"])
+    return attachments
+
+
+
+def extract_html_or_plain_part(payload):
+    if payload.get("mimeType") == "text/html":
+        data = payload.get("body", {}).get("data")
+        if data:
+            decoded = base64.urlsafe_b64decode(data.encode("UTF-8")).decode("UTF-8", errors="ignore")
+            return "text/html", decoded
+    elif payload.get("mimeType") == "text/plain":
+        data = payload.get("body", {}).get("data")
+        if data:
+            decoded = base64.urlsafe_b64decode(data.encode("UTF-8")).decode("UTF-8", errors="ignore")
+            return "text/plain", decoded
+    # If this is a multipart message, check sub-parts recursively
+    for part in payload.get("parts", []):
+        mime_type, decoded = extract_html_or_plain_part(part)
+        if mime_type:
+            return mime_type, decoded
+    return None, None
+
+
+def sanitize_html_links(html):
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a"):
+        a.attrs.pop("href", None)  # Remove href
+        a.attrs.pop("target", None)  # Remove target if present
+        a.attrs.pop("rel", None)     # Remove rel if present
+    return str(soup)
+
+
+def disable_links(html):
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a"):
+        span = soup.new_tag("span")
+        span.string = a.get_text()
+        a.replace_with(span)
+    return str(soup)
 
 
 @app.route("/webhook/gmail/push", methods=["POST"])
@@ -425,26 +530,39 @@ def gmail_push_webhook():
         encoded_data = pubsub_message.get("data")
         if not encoded_data:
             return jsonify({"error": "Missing data"}), 400
+
         decoded_bytes = base64.b64decode(encoded_data)
         decoded_json = json.loads(decoded_bytes)
+
         email_address = decoded_json.get("emailAddress")
-        history_id = decoded_json.get("historyId")
-        if not email_address or not history_id:
+        new_history_id = decoded_json.get("historyId")
+
+        if not email_address or not new_history_id:
             logger.warning("Missing email or historyId")
             return jsonify({"error": "Missing fields"}), 400
-        logger.info(f"📬 Gmail push for {email_address}, historyId={history_id}")
+
+        logger.info(f"📬 Gmail push for {email_address}, historyId={new_history_id}")
+
         # Fetch GmailAccount info
         with get_conn() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT id, access_token, refresh_token FROM manage_platform_gmailaccount
+                    SELECT id, access_token, refresh_token, history_id
+                    FROM manage_platform_gmailaccount
                     WHERE email_address = %s AND active = TRUE
                     LIMIT 1
                 """, (email_address,))
                 row = cursor.fetchone()
+                logger.info(f"Found from manage_platform_gmailaccount {row}")
                 if not row:
-                    return jsonify({"error": "Gmail account not found"}), 404
-                account_id, access_token, refresh_token = row
+                    logger.error(f"Gmail account {email_address} not found or not active")
+                    return jsonify({"error": "Gmail account not found or not active"}), 404
+                account_id, access_token, refresh_token, last_stored_history_id = row
+
+        if not last_stored_history_id:
+            logger.warning("🚫 No previous history ID stored. Skipping fetch.")
+            return jsonify({"error": "No previous history ID"}), 400
+
         # Setup credentials
         creds = Credentials(
             token=access_token,
@@ -453,22 +571,52 @@ def gmail_push_webhook():
             client_id=config("GOOGLE_CLIENT_ID"),
             client_secret=config("GOOGLE_CLIENT_SECRET")
         )
-        if creds.expired:
+
+        logger.info(f"creds.valid {creds.valid} | creds.expired {creds.expired} | creds {creds}")
+        # Refresh if needed
+        if not creds.valid or creds.expired:
+            logger.info("🔁 Refreshing expired access token...")
             creds.refresh(Request())
-            access_token = creds.token  # update in DB later if needed
+            access_token = creds.token
+            with get_conn() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE manage_platform_gmailaccount
+                        SET access_token=%s,
+                            token_expiry=%s,
+                            updated_at=NOW()
+                        WHERE id=%s
+                    """, (creds.token, creds.expiry, account_id))
+
+        # Use Gmail API
         service = build('gmail', 'v1', credentials=creds)
-        history = service.users().history().list(
-            userId='me',
-            startHistoryId=history_id,
-            historyTypes=['messageAdded']
-        ).execute()
+
+        try:
+            history = service.users().history().list(
+                userId='me',
+                startHistoryId=last_stored_history_id,
+                historyTypes=['messageAdded']
+            ).execute()
+        except RefreshError as refresh_error:
+            logger.error(f"❌ Refresh failed after 401: {refresh_error}")
+            with get_conn() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE manage_platform_gmailaccount
+                        SET active=FALSE,
+                            updated_at=NOW()
+                        WHERE id=%s
+                    """, (account_id,))
+            return jsonify({"error": "OAuth refresh failed. Reauthorization required."}), 401
         logger.info(f"🔍 Gmail History keys: {history.keys()}")
-        for record in history.get("history", []):
-            for msg_meta in record.get("messages", []):
-                msg_id = msg_meta["id"]
-                # Check duplicate
-                with get_conn() as conn:
-                    with conn.cursor() as cursor:
+        logger.info(f"📚 Gmail history content: {json.dumps(history)}")
+
+        with get_conn() as conn:
+            with conn.cursor() as cursor:
+                for record in history.get("history", []):
+                    for msg_meta in record.get("messages", []):
+                        msg_id = msg_meta["id"]
+                        # Check duplicate
                         cursor.execute("""
                             SELECT 1 FROM manage_platform_processedgmailmessage
                             WHERE gmail_account_id = %s AND message_id = %s
@@ -477,35 +625,88 @@ def gmail_push_webhook():
                         if cursor.fetchone():
                             logger.info(f"⏩ Already processed message {msg_id}")
                             continue
-                # Fetch full message
-                message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
-                headers = {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
-                sender = headers.get("From")
-                timestamp = int(message.get("internalDate", 0)) // 1000
-                received_time = make_aware(datetime.utcfromtimestamp(timestamp))
-                # Extract plain text from payload
-                text_message = extract_plain_text(message.get("payload", {}))
-                logger.info(f"📨 Email from {sender}: {text_message[:50]}...")
-                # Push to Kafka
-                send_msg_from_customer(
-                    phone_number_id=email_address,
-                    recipient_id=sender,
-                    message_body=text_message,
-                    msg_type="text",
-                    msg_from_type="CUSTOMER",
-                    app_name="GMAIL"
-                )
-                # Save message ID to prevent duplicates
-                with get_conn() as conn:
-                    with conn.cursor() as cursor:
+                        # Fetch full message
+                        #message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+                        try:
+                            message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+                        except HttpError as e:
+                            if e.resp.status == 404:
+                                logger.warning(f"⚠️ Message {msg_id} not found. Skipping.")
+                                continue
+                            else:
+                                logger.warning("Exception while processing the message")
+                                raise  # re-raise other errors
+                        content_blocks = []
+                        headers = {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
+                        sender = headers.get("From")
+                        if not sender:
+                            # Save processed msg_id
+                            cursor.execute("""
+                                INSERT INTO manage_platform_processedgmailmessage
+                                (gmail_account_id, message_id, processed_at)
+                                VALUES (%s, %s, NOW())
+                            """, (account_id, msg_id))
+                            continue
+                        gmail_message_id = headers.get("Message-ID")
+                        gmail_thread_id = message.get("threadId")
+                        subject = headers.get("Subject", "No Subject")  # fallback
+                        attachments = extract_attachments(service, "me", message.get("payload", {}), msg_id, sender)
+                        logger.info(f"📎 Found {len(attachments)} attachments")
+                        timestamp = int(message.get("internalDate", 0)) // 1000
+                        # Extract raw HTML or plain
+                        mime_type, raw_content = extract_html_or_plain_part(message.get("payload", {}))
+                        logger.info(f"✉️ Extracted mime_type: {mime_type}")
+                        #if mime_type == "text/html" and raw_content:
+                        #    content_blocks = [{"type": "html", "html": raw_content}]
+                        if mime_type == "text/html" and raw_content:
+                            cleaned_html = disable_links(raw_content)
+                            content_blocks = [{"type": "html", "html": cleaned_html}]
+                        elif mime_type == "text/plain" and raw_content:
+                            plain_clean = re.sub(r'^>+', '', raw_content, flags=re.MULTILINE)
+                            html_wrapped = f"<pre>{escape(plain_clean)}</pre>"
+                            content_blocks = [{"type": "html", "html": html_wrapped}]
+                        else:
+                            content_blocks = []
+                        logger.info(f": content_blocks {content_blocks}")
+                        attachment_path = f"/tmp/{sender}/"
+                        # Push to Kafka
+                        send_msg_from_customer(
+                            phone_number_id=email_address,
+                            recipient_id=sender,
+                            message_body='',
+                            subject=subject,
+                            content_blocks = content_blocks,
+                            attachments=attachments,
+                            message_id=gmail_message_id,
+                            thread_id=gmail_thread_id,
+                            msg_type="email",
+                            msg_from_type="CUSTOMER",
+                            app_name="GMAIL"
+                        )
+
+                        # Save processed msg_id
                         cursor.execute("""
-                            INSERT INTO manage_platform_processedgmailmessage (gmail_account_id, message_id, created_at)
+                            INSERT INTO manage_platform_processedgmailmessage
+                            (gmail_account_id, message_id, processed_at)
                             VALUES (%s, %s, NOW())
                         """, (account_id, msg_id))
-        return jsonify({"status": "Published to Kafka"}), 200
+
+                logger.warning("Message processing complete and returning")
+                # ✅ Finally, update the last stored historyId with this one
+                cursor.execute("""
+                    UPDATE manage_platform_gmailaccount
+                    SET history_id=%s, updated_at = NOW()
+                    WHERE id=%s
+                """, (new_history_id, account_id))
+
+        status = {"status": "Published to Kafka"}
+        logger.info(f"Returning status {status}")
+        return jsonify(status), 200
+
     except Exception as e:
-        logger.exception(f"💥 Gmail webhook error: {e}")
+        logger.error(f"💥 Gmail webhook error: {e}")
         return jsonify({"error": str(e)}), 500
+
 
 
 start_background_tasks()

@@ -42,7 +42,7 @@ class EmployeeOwnerQueryMixin:
         # Start from the queryset already filtered by organization
         queryset = super().get_queryset()
         # Filter EnterpriseProfile by linked user's user_type = 'employee'
-        return queryset.filter(user__user_type__in=['employee', 'agent', 'owner'])
+        return queryset.filter(user__user_type__in=['employee', 'agent', 'owner', 'agent', 'intern', 'manager', 'nontech'])
 
 class AgentQuerysetMixin:
     def get_queryset(self):
@@ -60,7 +60,7 @@ class GoogleLoginView(APIView):
         existing_plans = None
         if user.user_type == "owner":
             existing_plans = ("manage_users", "manage_files", "manage_contacts", "manage_campaigns", "manage_conversations")
-        elif user.user_type in ("individual", "employee"):# Individual and employee will have the same level of subscription
+        elif user.user_type in ("individual", "employee", "intern", "manager", "nontech"):# Individual and employee will have the same level of subscription
             existing_plans = ("manage_users", "manage_files")
         plan = None
         subscriptions_statuses = set()
@@ -104,9 +104,11 @@ class GoogleLoginView(APIView):
             
             with transaction.atomic():
                 subscriptions_statuses = self.verify_and_update_subscription(user)
-                if isinstance(subscriptions_statuses, Response):
+                #if not subscriptions_statuses:
+                #    return Response({"error": "No valid subscriptions available."}, status=status.HTTP_400_BAD_REQUEST)
+                if subscriptions_statuses and isinstance(subscriptions_statuses, Response):
                     return subscriptions_statuses
-                if len(subscriptions_statuses) > 1:
+                if subscriptions_statuses and len(subscriptions_statuses) > 1:
                     # It means we have other than 'active' statuses
                     user.is_subscription_complete = False
                     user.save()
@@ -559,3 +561,4 @@ class GuestJWTView(APIView):
         }
         token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
         return Response({"access": token}, status=status.HTTP_201_CREATED)
+

@@ -35,7 +35,10 @@ class CustomUserManager(BaseUserManager):
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     USER_TYPE_CHOICES = (
         ('individual', 'Individual'),
+        ('intern', 'Intern'),
+        ('nontech', 'NonTech'),
         ('employee', 'Employee'),
+        ('manager', 'Manager'),
         ('owner', 'Owner'),
         ('agent', 'Agent')
     )
@@ -95,3 +98,4 @@ class PasswordResetOTP(models.Model):
 
     def __str__(self):
         return f"OTP for {self.user.email} - {self.otp} (Verified: {self.is_verified})"
+

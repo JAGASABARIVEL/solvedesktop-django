@@ -64,11 +64,11 @@ def is_payment_complete(user):
 
 class EnterpriserUsers(permissions.BasePermission):
     def has_permission(self, request, view):
-        if (request.user.is_authenticated and request.user.user_type in {"owner", "employee"}) and is_subscription_complete(request.user) and is_payment_complete(request.user):
+        if (request.user.is_authenticated and request.user.user_type in {"owner", "employee", "intern", "manager", "nontech"}) and is_subscription_complete(request.user) and is_payment_complete(request.user):
             return True#verify_enterprise_subscription(request.user.enterprise_profile.organization.owner)
 
     def has_object_permission(self, request, view, obj):
-        if request.user.is_authenticated and request.user.user_type in {"owner", "employee"} and is_subscription_complete(request.user) and is_payment_complete(request.user):
+        if request.user.is_authenticated and request.user.user_type in {"owner", "employee", "intern", "manager", "nontech"} and is_subscription_complete(request.user) and is_payment_complete(request.user):
              return True#verify_enterprise_subscription(request.user.enterprise_profile.organization.owner)
 
 
@@ -84,9 +84,10 @@ class IndividualUsers(permissions.BasePermission):
 
 class EnterpriseIndividualUsers(permissions.BasePermission):
     def has_permission(self, request, view):
-        if (request.user.is_authenticated and request.user.user_type in {"individual", "owner", "employee"}) and is_subscription_complete(request.user) and is_payment_complete(request.user):
+        if (request.user.is_authenticated and request.user.user_type in {"individual", "owner", "employee", "intern", "manager", "nontech"}) and is_subscription_complete(request.user) and is_payment_complete(request.user):
             return True#verify_individual_enterprise_common_subscription(request.user)
 
     def has_object_permission(self, request, view, obj):
-        if (request.user.is_authenticated and request.user.user_type in {"individual", "owner", "employee"}) and is_subscription_complete(request.user) and is_payment_complete(request.user):
+        if (request.user.is_authenticated and request.user.user_type in {"individual", "owner", "employee", "intern", "manager", "nontech"}) and is_subscription_complete(request.user) and is_payment_complete(request.user):
             return True#verify_individual_enterprise_common_subscription(request.user)
+
