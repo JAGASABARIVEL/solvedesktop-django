@@ -1,5 +1,6 @@
 
 import json
+import logging
 from datetime import datetime, timedelta, time, date
 import time as python_time
 from dateutil.relativedelta import relativedelta
@@ -15,7 +16,7 @@ from django.contrib.auth import get_user_model
 from django.utils.timezone import now, make_aware
 from django.conf import settings
 
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -28,14 +29,18 @@ from .models import Conversation, UserMessage, IncomingMessage
 from manage_users.models import CustomUser, EnterpriseProfile
 from manage_platform.models import Platform
 from manage_contact.models import Contact
+from manage_files.models import generate_presigned_url
 from manage_users.permissions import EnterpriserUsers
 
-from .serializers import ConversationSerializer
+from .serializers import ConversationSerializer, ConversationWithoutMessagesSerializer
 
 from VendorApi.Whatsapp.message import MediaMessage, TextMessage, TemplateMessage, WebHookException, SendException
 from VendorApi.Webchat.message import TextMessage as webTextMessage
 from VendorApi.Messenger.message import TextMessage as MessengerTextMessage
 from VendorApi.Gmail.message import GmailMessage
+
+logger = logging.getLogger("myapp")
+logger.info("Test log from conversation view")
 
 PLATFORM_NOT_SUPPORTED_WEBHOOK = ['gmail', 'webchat']
 
@@ -63,6 +68,20 @@ ALLOWED_MIME_TYPES = {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     ]
 }
+
+
+def bulk_refresh_signed_urls(files, expiry_seconds=86400):
+    time_now = now()
+    refreshed_files = []
+    for file in files:
+        file.signed_url = generate_presigned_url(file.s3_key, expiry_seconds)
+        file.signed_url_expires_at = time_now + timedelta(seconds=expiry_seconds)
+        refreshed_files.append(file)
+    if refreshed_files:
+        with transaction.atomic():
+            File.objects.bulk_update(refreshed_files, ["signed_url", "signed_url_expires_at"])
+    return refreshed_files
+
 
 def get_media_type_from_mime(mime_type):
     for media_type, types in ALLOWED_MIME_TYPES.items():
@@ -196,13 +215,24 @@ def format_template_messages(template, parameters_body):
                     continue
         return json.dumps(template)
 
+from rest_framework.pagination import PageNumberPagination
+
+class ConversationPagination(PageNumberPagination):
+    page_size = 10   # default rows per page
+    page_size_query_param = "page_size"  # allow client override
+    max_page_size = 100
 
 from manage_files.models import File, FileStorageEvent, FilePermission
+
 class ConversationViewSet(viewsets.ModelViewSet):
     queryset = Conversation.objects.all().select_related('assigned_user', 'contact')
-    serializer_class = ConversationSerializer
+    serializer_class = ConversationWithoutMessagesSerializer
     permission_classes = [EnterpriserUsers]
-
+    pagination_class = ConversationPagination
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['contact__name', 'contact__phone', 'assigned_user__username', 'status']
+    ordering_fields = ['contact__name', 'assigned_user__username', 'status', 'created_at', 'contact__phone']
+    ordering = ['-created_at']  # default sort
     def get_queryset(self):
         user = self.request.user
         status = self.request.query_params.get('status', None)
@@ -210,13 +240,71 @@ class ConversationViewSet(viewsets.ModelViewSet):
         # Get the organization via the EnterpriseProfile model
         enterprise_profile = getattr(user, "enterprise_profile", None)
         organization = getattr(enterprise_profile, "organization", None)
-        self.queryset = self.queryset.filter(organization=organization)
+        qs = self.queryset.filter(organization=organization)
         if status:
-            self.queryset = self.queryset.filter(status=status)
+            qs = qs.filter(status=status)
         if is_user_specific == "true":
-            self.queryset = self.queryset.filter(assigned_user=user)
-        return self.queryset
+            qs = qs.filter(assigned_user=user)
+        return qs
+    @action(detail=False, methods=['get'])
+    def active_conversation_for_org(self, request, pk=None):
+        """Retrieve conversations with status 'active' or 'new' for the logged-in user"""
+        enterprise_profile = getattr(self.request.user, "enterprise_profile", None)
+        organization = getattr(enterprise_profile, "organization", None)
+        conversations = Conversation.objects.filter(
+            organization=organization,
+            status__in=['active', 'new']  # Filters both active and new status
+        )
+        serializer = ConversationSerializer(conversations, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def active_conversation_for_user(self, request, pk=None):
+        """Retrieve conversations with status 'active' or 'new' for the logged-in user"""
+        conversations = Conversation.objects.filter(
+            assigned_user=request.user.id,
+            status__in=['active', 'new']  # Filters both active and new status
+        )
+        serializer = ConversationSerializer(conversations, many=True)
+        return Response(serializer.data)
     
+    @action(detail=False, methods=['get'])
+    def all_conversation_for_user(self, request, pk=None):
+        """Retrieve conversations with status 'active' or 'new' for the logged-in user"""
+        conversations = Conversation.objects.filter(
+            assigned_user=request.user.id,
+            status__in=['active', 'new', 'closed']  # Filters both active and new status
+        )
+        serializer = ConversationSerializer(conversations, many=True)
+        return Response(serializer.data)
+
+class ChatWindowConversationViewSet(viewsets.ModelViewSet):
+    queryset = Conversation.objects.all().select_related('assigned_user', 'contact')
+    serializer_class = ConversationSerializer
+    permission_classes = [EnterpriserUsers]
+    def get_queryset(self):
+        user = self.request.user
+        status = self.request.query_params.get('status', None)
+        is_user_specific = self.request.query_params.get('is_user_specific', None)
+        # Get the organization via the EnterpriseProfile model
+        enterprise_profile = getattr(user, "enterprise_profile", None)
+        organization = getattr(enterprise_profile, "organization", None)
+        qs = self.queryset.filter(organization=organization)
+        if status:
+            qs = qs.filter(status=status)
+        if is_user_specific == "true":
+            qs = qs.filter(assigned_user=user)
+        return qs
+
+    def _refresh_signed_urls(self, qs):
+        user_msgs = UserMessage.objects.filter(conversation__in=qs)
+        file_ids = [int(msg.status_details) for msg in user_msgs if msg.status_details and msg.status_details.isdigit()]
+        incoming_msgs = IncomingMessage.objects.filter(conversation__in=qs)
+        file_ids += [int(msg.status_details) for msg in incoming_msgs if msg.status_details and msg.status_details.isdigit()]
+        if file_ids:
+            expired_files = File.objects.filter(id__in=file_ids, signed_url_expires_at__lt=now())
+            bulk_refresh_signed_urls(expired_files)
+
     @action(detail=False, methods=['get'])
     def active_conversation_for_org(self, request, pk=None):
         """Retrieve conversations with status 'active' or 'new' for the logged-in user"""
@@ -249,15 +337,26 @@ class ConversationViewSet(viewsets.ModelViewSet):
         serializer = ConversationSerializer(conversations, many=True)
         return Response(serializer.data)
     
+    #@action(detail=False, methods=['get'])
+    #def history_by_contact(self, request):
+    #    logger.info(f"History endpoint being hit")
+    #    """Retrieve all conversation history for a given contact ID"""
+    #    contact_id = request.query_params.get("contact_id")  # Fetch from query params
+    #    if not contact_id:
+    #        return Response({"error": "contact_id is required"}, status=400)
+    #    conversations = Conversation.objects.filter(contact_id=contact_id).order_by("-created_at")
+    #    serializer = ConversationSerializer(conversations, many=True)
+    #    return Response(serializer.data)
+
     @action(detail=False, methods=['get'])
     def history_by_contact(self, request):
         """Retrieve all conversation history for a given contact ID"""
-        contact_id = request.query_params.get("contact_id")  # Fetch from query params
+        contact_id = request.query_params.get("contact_id")
         if not contact_id:
             return Response({"error": "contact_id is required"}, status=400)
-
-        conversations = Conversation.objects.filter(contact_id=contact_id).order_by("-created_at")
-        serializer = ConversationSerializer(conversations, many=True)
+        qs = Conversation.objects.filter(contact_id=contact_id).order_by("-created_at")
+        self._refresh_signed_urls(qs)
+        serializer = ConversationSerializer(qs, many=True)
         return Response(serializer.data)
 
     #@action(detail=True, methods=['post'])
@@ -1290,4 +1389,6 @@ class UnrespondedConversationNotificationView(APIView):
             'conversation_count': len(notifications),
             'notifications': notifications
         })
+
+
 

@@ -76,13 +76,63 @@ B2_ACCESS_KEY_ID = config("B2_ACCESS_KEY_ID")
 B2_SECRET_ACCESS_KEY = config("B2_SECRET_ACCESS_KEY")
 B2_STORAGE_BUCKET_NAME = config("B2_STORAGE_BUCKET_NAME")
 
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,   # keep Django’s default loggers
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': 'drf_debug.log',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        # Django’s internal logs
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+        # DRF-specific logs
+        'rest_framework': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        # Your app logs
+        'myapp': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+}
+
+
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
     "api.jackdesk.com",
+    "127.0.0.1"
     #"ec2-65-0-105-225.ap-south-1.compute.amazonaws.com",
     #"jagasabarivel.pythonanywhere.com"
 ]
@@ -207,17 +257,6 @@ DATABASES = {
         'PASSWORD': config("PG_PASSWORD"),
         'HOST': config("PG_HOST"),
         'PORT': config("PG_PORT")
-    }
-}
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'postgres',
-        'USER': 'postgres',
-        'PASSWORD': config("PG_PASSWORD"),
-        'HOST': 'localhost',
-        'PORT': '5432',
     }
 }
 

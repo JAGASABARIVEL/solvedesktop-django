@@ -44,9 +44,10 @@ os.environ["B2_ACCESS_KEY_ID"] = config("B2_ACCESS_KEY_ID")
 os.environ["B2_SECRET_ACCESS_KEY"] = config("B2_SECRET_ACCESS_KEY")
 os.environ["B2_STORAGE_BUCKET_NAME"] = config("B2_STORAGE_BUCKET_NAME")
 if os.getenv("PRODUCTION") == '1':
-    os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
+    os.environ["SOCKET_URL"] = "https://websocket.jackdesk.com?token={access_token}"
+    #os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
 else:
-    os.environ["SOCKET_URL"] = "http://localhost:5001?token={access_token}"
+    os.environ["SOCKET_URL"] = "https://websocket.jackdesk.com?token={access_token}"
 
 def generate_forever_token():
     payload = {
@@ -166,20 +167,20 @@ class AutoAssigner:
     def auto_assign(self, cursor, conv_id, org_id):
         config = self.get_organization_config(cursor, org_id)
         if not config:
-            return None
+            return (None, None)
         enabled, algorithm, owner_id = config
         if not enabled:
-            return None
+            return (None, None)
         employee_ids = self.get_employees(cursor, org_id, owner_id)
         self.logger.info(f"employees {employee_ids}")
         if not employee_ids:
-            return None
+            return (None, None)
         if algorithm == 'rr':
             user_id = self.get_round_robin_user(cursor, org_id, employee_ids)
         elif algorithm == 'bw':
             user_id = self.get_bandwidth_user(cursor, org_id, employee_ids)
         else:
-            return None
+            return (None, None)
         if user_id:
             self.assign_conversation(cursor, conv_id, user_id)
             # Get username from employees list
@@ -191,7 +192,10 @@ class AutoAssigner:
 
 class WhatsAppKafkaConsumer:
     def __init__(self):
-        self.use_sqlite = os.getenv("PRODUCTION") == '0'
+        # Keeping it constant since the dev environment now by defauklt supports psql
+        #self.use_sqlite = os.getenv("PRODUCTION") == '0'
+        self.use_sqlite = False
+        ####
         self.db_driver = sqlite3 if self.use_sqlite else psycopg2
         self.db_file = os.getenv("SQLITE_DB", "dev.sqlite3")
         self.topic = "whatsapp"
@@ -1257,10 +1261,5 @@ class WhatsAppKafkaConsumer:
 
 from threading import Thread
 if __name__ == "__main__":
-    if os.environ["PRODUCTION"] == '1':
-        consumer = WhatsAppKafkaConsumer()
-        #whatsapp_org_incomplete_task = Thread(target=consumer.retry_whatsapp_org_task, daemon=True)
-        #whatsapp_org_incomplete_task.start()
-        consumer.consume()
-    else:
-        WhatsAppKafkaConsumer().devlmode()
+    consumer = WhatsAppKafkaConsumer()
+    consumer.consume()
