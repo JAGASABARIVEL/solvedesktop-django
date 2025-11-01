@@ -57,6 +57,9 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
+    frappe_user_id = models.CharField(blank=True, max_length=255, null=True, unique=True)
+    frappe_synced = models.BooleanField(default=False, db_index=True)
+
     USERNAME_FIELD = "phone_number"
     REQUIRED_FIELDS = ["email"]
 

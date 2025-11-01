@@ -267,3 +267,44 @@ class BulkDeleteGroupMemberView(generics.DestroyAPIView):
         # Delete only group members belonging to the user's organization
         deleted_count, _ = GroupMember.objects.filter(id__in=member_ids, group__organization=user_org).delete()
         return Response({"deleted": deleted_count}, status=status.HTTP_204_NO_CONTENT)
+
+
+class ContactSyncStatusView(generics.RetrieveAPIView):
+    """
+    Check CRM sync status of a contact
+    """
+    serializer_class = ContactSerializer
+    permission_classes = [EnterpriserUsers]
+    
+    def get_queryset(self):
+        organization = self.request.user.enterprise_profile.organization
+        return Contact.objects.filter(organization=organization)
+    
+    def retrieve(self, request, *args, **kwargs):
+        contact = self.get_object()
+        
+        sync_status = {
+            "contact_id": contact.id,
+            "name": contact.name,
+            "phone": contact.phone,
+            "frappe_synced": contact.frappe_synced,
+            "frappe_contact_id": contact.frappe_contact_id,
+            "last_sync": contact.frappe_last_sync.isoformat() if contact.frappe_last_sync else None,
+            "sync_message": "Synced to CRM" if contact.frappe_synced else "Pending CRM sync"
+        }
+        
+        # Get latest sync log
+        from manage_crm.models import CRMSyncLog
+        log = CRMSyncLog.objects.filter(
+            django_id=contact.id,
+            doctype='Contact'
+        ).order_by('-synced_at').first()
+        
+        if log:
+            sync_status['latest_log'] = {
+                'status': log.status,
+                'details': log.details,
+                'synced_at': log.synced_at.isoformat()
+            }
+        
+        return Response(sync_status)

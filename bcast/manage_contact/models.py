@@ -24,6 +24,9 @@ class Contact(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    frappe_contact_id = models.CharField(blank=True, max_length=255, null=True, unique=True)
+    frappe_synced = models.BooleanField(default=False, db_index=True)
+    frappe_last_sync = models.DateTimeField(blank=True, null=True)
 
     def __str__(self):
         return self.name

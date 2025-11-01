@@ -15,4 +15,7 @@ class Organization(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     auto_allocation_enabled = models.BooleanField(default=False)
     auto_allocation_algorithm = models.TextField(choices=ALLOCATION_ALGO_CHOICES, default='rr')
+    frappe_site_name = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    frappe_api_token = models.CharField(blank=True, max_length=500, null=True)
+    frappe_enabled = models.BooleanField(default=False)
 

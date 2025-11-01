@@ -43,13 +43,17 @@ PLATFORM_MODEL = 'manage_platform.Platform'
 CONTACT_MODEL = 'manage_contact.Contact'
 
 # Celery configuration
-UPSTASH_REDIS_HOST=config("UPSTASH_REDIS_HOST")
-UPSTASH_REDIS_PORT=6379
-UPSTASH_REDIS_PASSWORD=config("UPSTASH_REDIS_PASSWORD")
-CELERY_BROKER_URL = f"rediss://:{UPSTASH_REDIS_PASSWORD}@{UPSTASH_REDIS_HOST}:{UPSTASH_REDIS_PORT}?ssl_cert_reqs=required"
+CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
-
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+# Retry configuration
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # Google Secrets
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID")
@@ -123,6 +127,11 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+        'manage_crm': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
 
@@ -139,6 +148,12 @@ ALLOWED_HOSTS = [
 
 
 # Application definition
+
+# CRM Configuration
+CRM_INSTALLED_APPS = [
+    'manage_crm.apps.ManageCrmConfig',
+    'django_celery_results',
+]
 
 INSTALLED_APPS = [
     "corsheaders",
@@ -170,8 +185,8 @@ INSTALLED_APPS = [
     'manage_files',
     'manage_email',
     'manage_productivity_tracker',
-    'manage_local_database_sync'
-]
+    'manage_local_database_sync',
+] + CRM_INSTALLED_APPS
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
